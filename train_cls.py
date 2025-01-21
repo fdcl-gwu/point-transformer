@@ -68,8 +68,8 @@ def train():
     log_string(config)
  
     ## Create Dataloader
-    # data_path = 'data/modelnet40_normal_resampled/'
-    data_path = 'data/ModelNet40/'
+    data_path = 'data/modelnet40_normal_resampled/'
+    # data_path = 'data/ModelNet40/'
     train_ds = ModelNetDataLoader(root=data_path, npoint=config['num_points'], split='train', normal_channel=config['use_normals'])
     test_ds = ModelNetDataLoader(root=data_path, npoint=config['num_points'], split='test', normal_channel=config['use_normals'])
 
