@@ -14,6 +14,16 @@ import helper.provider as provider
 
 def train():
 
+    # To check CUDA and PyTorch installation: $ conda list | grep 'pytorch\|cudatoolkit'
+    device_id = 1  # Change this to 1 to use the second GPU
+    torch.cuda.set_device(device_id)
+
+    if torch.cuda.is_available():
+        current_device = torch.cuda.current_device()
+        print(f"Using GPU: {torch.cuda.get_device_name(current_device)}")
+    else:
+        print("CUDA is not available. Using CPU.")
+
     def log_string(str):
         logger.info(str)
         print(str)
@@ -25,7 +35,7 @@ def train():
             'optimizer': 'RangerVA',
             'lr': 0.001,
             'decay_rate': 1e-06,
-            'epochs': 500,
+            'epochs': 5,
             'num_classes': 40,
             'dropout': 0.4,
             'M': 4,
@@ -56,15 +66,16 @@ def train():
     logger.addHandler(file_handler)
     log_string('Hyperparameters:')
     log_string(config)
-
+ 
     ## Create Dataloader
     # data_path = 'data/modelnet40_normal_resampled/'
-    # train_ds = ModelNetDataLoader(root=data_path, npoint=config['num_points'], split='train', normal_channel=config['use_normals'])
-    # test_ds = ModelNetDataLoader(root=data_path, npoint=config['num_points'], split='test', normal_channel=config['use_normals'])
+    data_path = 'data/ModelNet40/'
+    train_ds = ModelNetDataLoader(root=data_path, npoint=config['num_points'], split='train', normal_channel=config['use_normals'])
+    test_ds = ModelNetDataLoader(root=data_path, npoint=config['num_points'], split='test', normal_channel=config['use_normals'])
 
-    # train_dl = torch.utils.data.DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=8)
-    # test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=8)
-
+    train_dl = torch.utils.data.DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=8)
+    test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=8)
+ 
     ## Create Point Transformer model
     model = pt_cls.Point_Transformer(config).cuda()
     # model = pt_cls.SortNet(128,6, top_k=64).cuda()
@@ -88,8 +99,9 @@ def train():
     #     out = model(a, b)
     # t.toc()
 
+    # # UNCOMMENT TO CHECK THE MODEL
+    # exit()
 
-    exit()
     #
     criterion = pt_cls.Loss().cuda()
 

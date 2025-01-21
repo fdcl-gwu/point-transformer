@@ -138,7 +138,7 @@ class Point_Transformer(nn.Module):
 
 
     def forward(self, input):
-  
+
         #############################################
         ## Global Features 
         #############################################
@@ -254,7 +254,6 @@ class SortNet(nn.Module):
         self.feat_bn = nn.ModuleList([nn.BatchNorm2d(num_features=self.feat_channels[i]) for i in range(len(self.feat_channels))])
 
     def forward(self, sortvec, input):
-        
         top_k = self.top_k
         batch_size = input.shape[0]
         feat_dim = input.shape[1]
@@ -299,7 +298,10 @@ class PTransformerDecoderLayer(nn.Module):
         self.activation = activation
 
     def forward(self, tgt, memory, tgt_mask=None, memory_mask=None,
-                tgt_key_padding_mask=None, memory_key_padding_mask=None):
+                tgt_key_padding_mask=None, memory_key_padding_mask=None, **kwargs):
+        
+        # print("Unused kwargs PTransformerDecoderLayer:", kwargs)
+
         r"""Pass the inputs (and mask) through the decoder layer.
 
         Args:
@@ -353,7 +355,10 @@ class PTransformerDecoder(nn.Module):
 
     def forward(self, tgt, memory, tgt_mask=None,
                 memory_mask=None, tgt_key_padding_mask=None,
-                memory_key_padding_mask=None):
+                memory_key_padding_mask=None, **kwargs):
+        
+        # print("Unused kwargs PTransformerDecoder:", kwargs)
+
         r"""Pass the inputs (and mask) through the decoder layer in turn.
 
         Args:
