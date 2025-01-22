@@ -8,9 +8,10 @@ import torch
 import numpy as np
 from tqdm import tqdm
 import model.pointtransformer_cls as pt_cls
-from helper.ModelNetDataLoader import ModelNetDataLoader
+from helper.ScanNetDataLoader import ScanNetDataLoader
 from helper.optimizer import RangerVA
 import helper.provider as provider
+
 
 def train():
 
@@ -31,12 +32,11 @@ def train():
     ## Hyperparameters
     config = {'num_points' : 1024,
             'batch_size': 11,
-            'use_normals': True,
+            'use_normals': False,
             'optimizer': 'RangerVA',
             'lr': 0.001,
             'decay_rate': 1e-06,
-            'epochs': 5,
-            'num_classes': 40,
+            'epochs': 10,
             'dropout': 0.4,
             'M': 4,
             'K': 64,
@@ -47,7 +47,7 @@ def train():
     timestr = str(datetime.datetime.now().strftime('%Y-%m-%d_%H-%M'))
     experiment_dir = Path('./log/')
     experiment_dir.mkdir(exist_ok=True)
-    experiment_dir = experiment_dir.joinpath('classification')
+    experiment_dir = experiment_dir.joinpath('pose_estimation')
     experiment_dir.mkdir(exist_ok=True)
     experiment_dir = experiment_dir.joinpath(timestr)
     experiment_dir.mkdir(exist_ok=True)
@@ -56,7 +56,7 @@ def train():
         f.write(str(config))
         f.close()
 
-    ## logger
+    ## logger (for hyperparameter config)
     logger = logging.getLogger("Model")
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(message)s')
@@ -68,14 +68,21 @@ def train():
     log_string(config)
  
     ## Create Dataloader
-    data_path = 'data/modelnet40_normal_resampled/'
-    # data_path = 'data/ModelNet40/'
-    train_ds = ModelNetDataLoader(root=data_path, npoint=config['num_points'], split='train', normal_channel=config['use_normals'])
-    test_ds = ModelNetDataLoader(root=data_path, npoint=config['num_points'], split='test', normal_channel=config['use_normals'])
+    data_path = 'data/ScanNet'
+    dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], normal_channel=config['use_normals'])
+
+    # Define train-test split ratio
+    train_size = int(0.95 * len(dataset))  # 80% train, 20% test
+    test_size = len(dataset) - train_size
+    train_ds, test_ds = torch.utils.data.random_split(dataset, [train_size, test_size])
 
     train_dl = torch.utils.data.DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=8)
     test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=8)
  
+    print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
+
+    exit()
+
     ## Create Point Transformer model
     model = pt_cls.Point_Transformer(config).cuda()
     # model = pt_cls.SortNet(128,6, top_k=64).cuda()
