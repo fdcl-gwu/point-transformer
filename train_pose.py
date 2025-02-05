@@ -7,8 +7,9 @@ import datetime
 import torch
 import numpy as np
 from tqdm import tqdm
-import model.pointtransformer_cls as pt_cls
+import model.pointtransformer_pose as pt_pose
 from helper.ScanNetDataLoader import ScanNetDataLoader
+from helper.SimNetDataLoader import SimNetDataLoader
 from helper.optimizer import RangerVA
 import helper.provider as provider
 
@@ -32,7 +33,7 @@ def train():
     ## Hyperparameters
     config = {'num_points' : 1024,
             'batch_size': 11,
-            'use_normals': False,
+            'use_labels': True,
             'optimizer': 'RangerVA',
             'lr': 0.001,
             'decay_rate': 1e-06,
@@ -67,12 +68,17 @@ def train():
     log_string('Hyperparameters:')
     log_string(config)
  
-    ## Create Dataloader
-    data_path = 'data/ScanNet'
-    dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], normal_channel=config['use_normals'])
+    # Create DataLoader
+    # # UNCOMMENT FOR ScanNet
+    # data_path = 'data/ScanNet'
+    # dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'])
+
+    # UNCOMMENT FOR SimNet
+    data_path = 'data/SimNet'
+    dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'])
 
     # Define train-test split ratio
-    train_size = int(0.95 * len(dataset))  # 80% train, 20% test
+    train_size = int(0.95 * len(dataset))  # 95% train, 5% test
     test_size = len(dataset) - train_size
     train_ds, test_ds = torch.utils.data.random_split(dataset, [train_size, test_size])
 
@@ -82,10 +88,11 @@ def train():
     print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
 
     exit()
+    # STOP HERE: 01/22/2025, 7:00 PM
 
     ## Create Point Transformer model
-    model = pt_cls.Point_Transformer(config).cuda()
-    # model = pt_cls.SortNet(128,6, top_k=64).cuda()
+    model = pt_pose.Point_Transformer(config).cuda()
+    # model = pt_pose.SortNet(128,6, top_k=64).cuda()
     
     def count_parameters(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)

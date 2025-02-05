@@ -67,16 +67,16 @@ class Point_Transformer(nn.Module):
         self.actv_fn = Mish()
 
         self.p_dropout = config['dropout']
-        self.norm_channel = config['use_normals']
-        self.input_dim = 6 if config['use_normals'] else 3
+        self.norm_channel = config['use_labels']
+        self.input_dim = 4 if config['use_labels'] else 3
         self.num_sort_nets = config['M']
         self.top_k = config['K']
         self.d_model = config['d_m']
  
 
         self.radius_max_points = 16
-        self.radius = 0.1
-
+        self.radius = 1.5
+        # END 05.02.2025
 
         ## Create rFF to project input points to latent feature space
         ## Local Feature Generation --> rFF

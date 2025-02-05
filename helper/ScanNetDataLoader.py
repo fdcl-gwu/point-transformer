@@ -60,7 +60,6 @@ def farthest_point_sample(point, npoint):
     point = point[centroids.astype(np.int32)]
     return point
 
-
 class ScanNetDataLoader(Dataset):
     def __init__(self, root,  npoint=1024, uniform=False, normal_channel=False, to_quaternion=True, cache_size=15000):
         self.root = root # /data/ScanNet
