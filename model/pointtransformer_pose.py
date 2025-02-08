@@ -68,7 +68,7 @@ class Point_Transformer(nn.Module):
 
         self.p_dropout = config['dropout']
         self.norm_channel = config['use_labels']
-        self.input_dim = 4 if config['use_labels'] else 3
+        self.input_dim = 13 if config['use_labels'] else 3
         self.num_sort_nets = config['M']
         self.top_k = config['K']
         self.d_model = config['d_m']
