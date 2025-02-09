@@ -135,7 +135,7 @@ def train():
         scheduler.step()
 
         for data in tqdm(train_dl, total=len(train_dl), smoothing=0.9):
-            points, target = data
+            points, target = data #i.e. points, cls
             points = points.data.numpy()
             points = provider.random_point_dropout(points)
             points[:,:, 0:3] = provider.random_scale_point_cloud(points[:,:, 0:3])

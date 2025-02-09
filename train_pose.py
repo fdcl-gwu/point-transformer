@@ -33,7 +33,7 @@ def train():
     ## Hyperparameters
     config = {'num_points' : 1024,
             'batch_size': 11,
-            'use_labels': True,
+            'use_labels': False,
             'optimizer': 'RangerVA',
             'lr': 0.001,
             'decay_rate': 1e-06,
@@ -87,9 +87,6 @@ def train():
  
     print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
 
-    exit()
-    # STOP HERE: 01/22/2025, 7:00 PM
-
     ## Create Point Transformer model
     model = pt_pose.Point_Transformer(config).cuda()
     # model = pt_pose.SortNet(128,6, top_k=64).cuda()
@@ -97,10 +94,17 @@ def train():
     def count_parameters(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-
     from helper.summary import summary
     #summary(model, input_data=[(1, 128, 1024),(6, 1024)])
-    summary(model, input_data=(6, 1024))
+
+    # Instaed of letting summary() create the batch size, manually create dummy inputs
+    dummy_input = torch.randn(2, 3, 1024).cuda()
+    dummy_centroid = torch.zeros(1, 3).cuda()  # Centroid (batch, 3)
+    dummy_scale = torch.ones(1, 1).cuda()  # Scale factor (batch, 1)
+
+    summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
+
+
     # from pytictoc import TicToc
 
     # t = TicToc()
@@ -116,9 +120,9 @@ def train():
     # UNCOMMENT TO CHECK THE MODEL
     exit()
 
-    #
-    criterion = pt_cls.Loss().cuda()
-
+    criterion = pt_pose.PoseLoss().cuda()
+    # STOP 09.02.2025
+    
     ## Create optimizer
     optimizer = None
     if config['optimizer'] == 'RangerVA':

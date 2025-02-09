@@ -121,6 +121,7 @@ def summary(
     kwargs = {k: kwargs[k].to(device) if torch.is_tensor(kwargs[k]) else k for k in kwargs}
 
     try:
+        # equivalent to calling "model.forward(dummy_input, dummy_centroid, dummy_scale)"
         with torch.no_grad():
             _ = model.to(device)(*x, *args, **kwargs)
     except Exception:

@@ -20,14 +20,19 @@ def load_pose_file(filepath, to_quaternion=True):
     quaternion = np.array([pose_data["qx"], pose_data["qy"], pose_data["qz"], pose_data["qw"]], dtype=np.float32)
     
     return np.hstack((quaternion, translation))  # [qx, qy, qz, qw, tx, ty, tz]
-    
-# TODO: choose better way of normalizing
+
 def pc_normalize(pc):
-    centroid = np.mean(pc, axis=0)
-    pc = pc - centroid
-    m = np.max(np.sqrt(np.sum(pc**2, axis=1)))
-    pc = pc / m
-    return pc
+    """ Normalize the point cloud: center it and scale to unit sphere.
+        Also return centroid and scale for later use in pose estimation.
+    """
+    centroid = np.mean(pc, axis=0)  # Compute centroid
+    pc = pc - centroid  # Center the cloud
+
+    scale = np.max(np.sqrt(np.sum(pc**2, axis=1)))  # Compute scale (radius)
+    pc = pc / scale  # Normalize to unit sphere
+
+    return pc, centroid, scale  # Return normalized cloud, centroid, and scale
+
 
 class SimNetDataLoader(Dataset):
     def __init__(self, root,  npoint=1024, uniform=False, label_channel=False, cache_size=15000):
@@ -76,9 +81,7 @@ class SimNetDataLoader(Dataset):
 
             # NOTE: no FPS for Gazebo scans. done in dataset preprocessing
             point_cloud = point_cloud[:self.npoints, :]
-
-            # Optional normalization (currently commented out)
-            # point_cloud[:, :3] = pc_normalize(point_cloud[:, :3])
+            point_cloud[:, :3], centroid, scale = pc_normalize(point_cloud[:, :3])
 
             # Load the pose data
             pose = load_pose_file(pose_path)
@@ -90,10 +93,9 @@ class SimNetDataLoader(Dataset):
 
             # Store in cache if limit is not exceeded
             if len(self.cache) < self.cache_size:
-                self.cache[cache_key] = (point_cloud, pose)
+                self.cache[cache_key] = (point_cloud, pose, centroid, scale)
 
-        return point_cloud, pose
-
+        return point_cloud, pose, centroid, scale  # Return all values
         
 
     def __getitem__(self, index):

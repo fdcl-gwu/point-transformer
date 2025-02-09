@@ -48,12 +48,83 @@ def create_rFF3d(channel_list, num_points, dim):
 
     return rFF
 
-class Loss(nn.Module):
-    def __init__(self):
-        super(Loss, self).__init__()
+class PoseLoss(nn.Module):
+    def __init__(self, alpha=1.0):
+        """
+        Pose loss for 6DOF estimation using:
+        - Geodesic loss for rotation (axis-angle representation)
+        - L2 loss for translation residual
+        - Alpha scales the translation loss
+        """
+        super(PoseLoss, self).__init__()
+        self.alpha = alpha  # Scaling factor for translation loss
 
-    def forward(self, pred, target):
-        total_loss = F.nll_loss(pred, target)
+    def geodesic_loss(self, pred_r, gt_r):
+        """
+        Computes geodesic loss between predicted and ground truth rotations in axis-angle representation.
+        Converts axis-angle to rotation matrices and computes:
+        L_r = arccos( (trace(R_pred^T * R_gt) - 1) / 2 )
+        """
+
+        # Convert axis-angle to rotation matrices
+        R_pred = self.axis_angle_to_rotation_matrix(pred_r)  # [B, 3, 3]
+        R_gt = self.axis_angle_to_rotation_matrix(gt_r)  # [B, 3, 3]
+
+        # Compute trace of (R_pred^T * R_gt)
+        trace_val = torch.einsum('bii->b', torch.matmul(R_pred.transpose(1, 2), R_gt))
+
+        # Clamp to avoid numerical errors leading to NaNs
+        trace_val = torch.clamp((trace_val - 1) / 2, -1.0, 1.0)
+
+        # Compute geodesic loss
+        loss_r = torch.acos(trace_val)
+
+        return loss_r.mean()
+
+    def axis_angle_to_rotation_matrix(self, axis_angle):
+        """
+        Converts axis-angle representation to rotation matrix using the Rodrigues formula.
+        Input: axis-angle tensor (B, 3)
+        Output: rotation matrix tensor (B, 3, 3)
+        """
+
+        theta = torch.norm(axis_angle, dim=1, keepdim=True)  # Rotation magnitude
+        eps = 1e-6
+        axis = axis_angle / (theta + eps)  # Normalize axis
+        theta = theta.squeeze(1)  # Shape [B]
+
+        # Create skew-symmetric cross-product matrix
+        zeros = torch.zeros_like(theta)
+        K = torch.stack([
+            zeros, -axis[:, 2], axis[:, 1],
+            axis[:, 2], zeros, -axis[:, 0],
+            -axis[:, 1], axis[:, 0], zeros
+        ], dim=1).reshape(-1, 3, 3)
+
+        I = torch.eye(3, device=axis.device).unsqueeze(0)  # Identity matrix
+
+        # Rodrigues' formula for rotation matrix
+        R = I + torch.sin(theta).unsqueeze(1) * K + (1 - torch.cos(theta)).unsqueeze(1) * torch.matmul(K, K)
+
+        return R
+
+    def forward(self, pred_r, gt_r, pred_t, gt_t):
+        """
+        Computes total loss:
+        L_total = α * L_t + L_r
+        where:
+        - L_r (rotation loss) = Geodesic distance loss
+        - L_t (translation loss) = L2 loss on translation residuals
+        """
+
+        # Compute rotation loss (geodesic loss)
+        loss_r = self.geodesic_loss(pred_r, gt_r)
+
+        # Compute translation loss (L2 loss)
+        loss_t = F.mse_loss(pred_t, gt_t)
+
+        # Total loss: weighted sum
+        total_loss = loss_r + self.alpha * loss_t
 
         return total_loss
 
@@ -68,6 +139,7 @@ class Point_Transformer(nn.Module):
 
         self.p_dropout = config['dropout']
         self.norm_channel = config['use_labels']
+        print("Using labels:", self.norm_channel)
         self.input_dim = 13 if config['use_labels'] else 3
         self.num_sort_nets = config['M']
         self.top_k = config['K']
@@ -75,8 +147,7 @@ class Point_Transformer(nn.Module):
  
 
         self.radius_max_points = 16
-        self.radius = 1.5
-        # END 05.02.2025
+        self.radius = 0.2
 
         ## Create rFF to project input points to latent feature space
         ## Local Feature Generation --> rFF
@@ -121,23 +192,34 @@ class Point_Transformer(nn.Module):
         self.transformer_model = nn.Transformer(d_model=self.d_model,nhead=8, dim_feedforward=512, num_encoder_layers=1, num_decoder_layers=1, custom_decoder=self.custom_decoder)
         self.transformer_model.apply(init_weights)
 
-        # Create Classification Head
+        # Create the pose estimation heads
+        dim_flatten = out_dim * self.num_sort_nets * self.top_k  # The global feature vector
 
-        dim_flatten = out_dim * self.num_sort_nets * self.top_k
-        self.flatten_linear_ch = [dim_flatten, 512, 128, 40]
-        self.flatten_linear = nn.ModuleList([nn.Linear(in_features=self.flatten_linear_ch[i], 
-                                                   out_features=self.flatten_linear_ch[i+1]) for i in range(len(self.flatten_linear_ch) - 1)])
-        self.flatten_linear.apply(init_weights)
-        self.flatten_bn = nn.ModuleList([nn.BatchNorm1d(num_features=self.flatten_linear_ch[i+1]) for i in range(len(self.flatten_linear_ch) - 1)])
+        ## Pose Estimation Heads
+        # Rotation Head (Outputs 3D axis-angle representation)
+        self.rotation_mlp = nn.Sequential(
+            nn.Linear(dim_flatten, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 3)  # Output: (3,) axis-angle
+        )
 
-        ## Create Dropout layers for classification heads
-        self.dropout1 = nn.Dropout(p=self.p_dropout)
-        self.dropout2 = nn.Dropout(p=self.p_dropout)
-        self.dropout3 = nn.Dropout(p=self.p_dropout)
-        self.dropout4 = nn.Dropout(p=self.p_dropout)
+        # Translation Head (Outputs 3D residual translation)
+        self.translation_mlp = nn.Sequential(
+            nn.Linear(dim_flatten, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 3)  # Output: (3,) translation residual
+        )
+
+        # Apply Weights Initialization
+        self.rotation_mlp.apply(init_weights)
+        self.translation_mlp.apply(init_weights)
 
 
-    def forward(self, input):
+    def forward(self, input, centroid, scale):
 
         #############################################
         ## Global Features 
@@ -145,6 +227,7 @@ class Point_Transformer(nn.Module):
         xyz = input
 
         B, _, _ = xyz.shape
+        print("Input shape:", xyz.shape)
         
         if self.norm_channel:
             norm = xyz[:, 3:, :]
@@ -179,9 +262,9 @@ class Point_Transformer(nn.Module):
         x_local_sorted = torch.cat([sortnet(x_local, input)[0] for sortnet in self.sortnets], dim=-1)
 
         # this corresponds to s^j_i
-        x_local_scores = x_local_sorted[: ,6:, :].permute(0,2,1)
+        x_local_scores = x_local_sorted[: ,3:, :].permute(0,2,1)
         # this corresponds to p^j_i
-        x_local_sorted = x_local_sorted[:, :6, :].permute(0,2,1)
+        x_local_sorted = x_local_sorted[:, :3, :].permute(0,2,1)
 
         # Perform ball query search with feature aggregation
         all_points = input.squeeze(dim=1).permute(0,2,1)
@@ -192,6 +275,8 @@ class Point_Transformer(nn.Module):
         radius_centroids = query_points.unsqueeze(dim=-2)
 
         # This corresponds to g^j
+        print("radius_centroids shape:", radius_centroids.shape)  # Expected [B, ?, 4]
+        print("radius_points shape before fix:", radius_points.shape)  # Expected [B, ?, 3]
         radius_grouped = torch.cat([radius_centroids, radius_points], dim=-2).unsqueeze(dim=1)
 
         for i, radius_conv in enumerate(self.radius_cnn):
@@ -213,29 +298,22 @@ class Point_Transformer(nn.Module):
         embedding = embedding.permute(1, 2, 0)
 
         #############################################
-        ## Classification
+        ## Pose Estimation
         #############################################
-        output = torch.flatten(embedding, start_dim=1)
 
-        for i, linear in enumerate(self.flatten_linear):
-            bn = self.flatten_bn[i]
-            # Use activation function and batch norm for every layer except last
-            if i < len(self.flatten_linear) - 1:
-                output = self.actv_fn(bn(linear(output)))
-                if i == 0:
-                    output = self.dropout1(output)
-                elif i == 1:
-                    output = self.dropout2(output)
-                elif i == 2:
-                    output = self.dropout3(output)
-                elif i == 3:
-                    output = self.dropout4(output)
-            else:
-                output = linear(output)
+        # Flatten the feature vector for MLP heads
+        global_features = torch.flatten(embedding, start_dim=1)  # [B, dim_flatten]
 
-        output = F.log_softmax(output, -1)
-   
-        return output
+        # Predict rotation (axis-angle representation)
+        predicted_rotation = self.rotation_mlp(global_features)
+
+        # Predict translation residual (normalized space)
+        predicted_translation_residual = self.translation_mlp(global_features)
+
+        # Convert translation residual back to world-space
+        predicted_translation = predicted_translation_residual * scale + centroid
+
+        return predicted_rotation, predicted_translation
 
 
 class SortNet(nn.Module):
@@ -266,7 +344,8 @@ class SortNet(nn.Module):
 
         topk = torch.topk(sortvec, k=top_k, dim=-1)
         indices = topk.indices.squeeze()
-
+        print("SortNet indices shape:", indices.unsqueeze(0).shape)
+        print("SortNet input shape:", input.shape)
         sorted_input = index_points(input.permute(0,2,1), indices).permute(0,2,1)
         sorted_score = index_points(sortvec.permute(0,2,1), indices).permute(0,2,1)
 
@@ -417,6 +496,8 @@ def index_points(points, idx):
     Return:
         new_points:, indexed points data, [B, S, C]
     """
+    print("Index points shape:", points.shape) # Prints torch.Size([1, 1024, 3])
+    print("indices shape:", idx.shape)
     device = points.device
     B = points.shape[0]
     view_shape = list(idx.shape)
