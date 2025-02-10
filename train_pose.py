@@ -12,7 +12,7 @@ from helper.ScanNetDataLoader import ScanNetDataLoader
 from helper.SimNetDataLoader import SimNetDataLoader
 from helper.optimizer import RangerVA
 import helper.provider as provider
-
+from torch.utils.tensorboard import SummaryWriter
 
 def train():
 
@@ -35,9 +35,9 @@ def train():
             'batch_size': 11,
             'use_labels': False,
             'optimizer': 'RangerVA',
-            'lr': 0.001,
+            'lr': 0.0005,
             'decay_rate': 1e-06,
-            'epochs': 10,
+            'epochs': 100,
             'dropout': 0.4,
             'M': 4,
             'K': 64,
@@ -118,10 +118,9 @@ def train():
     # t.toc()
 
     # UNCOMMENT TO CHECK THE MODEL
-    exit()
+    # exit()
 
-    criterion = pt_pose.PoseLoss().cuda()
-    # STOP 09.02.2025
+    pose_criterion = pt_pose.PoseLoss(alpha=10).cuda()
     
     ## Create optimizer
     optimizer = None
@@ -140,9 +139,7 @@ def train():
     
     global_epoch = 0
     global_step = 0
-    best_instance_acc = 0.0
-    best_class_acc = 0.0
-    mean_correct = []
+    best_loss = float("inf")
             
     ## Learning Rate Scheduler
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.5)
@@ -151,62 +148,87 @@ def train():
         log_string(f"Epoch {epoch}/{config['epochs']}")
 
         scheduler.step()
+        total_loss = 0.0
 
-        for data in tqdm(train_dl, total=len(train_dl), smoothing=0.9):
-            points, target = data
-            points = points.data.numpy()
-            points = provider.random_point_dropout(points)
-            points[:,:, 0:3] = provider.random_scale_point_cloud(points[:,:, 0:3])
-            points[:,:, 0:3] = provider.shift_point_cloud(points[:,:, 0:3])
-            points = torch.Tensor(points)
-            target = target[:, 0]
+        ## Train
+        for batch_idx, data in enumerate(tqdm(train_dl, total=len(train_dl), smoothing=0.9)):
+            points, gt_pose , centroid, scale = data
+            points = points.cuda()
+            points = points.transpose(1, 2) # points should have [B, C, N] format
+            gt_pose = gt_pose.cuda() # gt_pose format: [qw, qx, qy, qz, tx, ty, tz]
+            centroid = centroid.cuda()
+            scale = scale.cuda()
+            gt_rotation = gt_pose[:, :4]  # Ground-truth quaternion (B,4)
+            gt_translation = gt_pose[:, 4:]  # Ground-truth translation (B,3)
 
-            points = points.transpose(2, 1)
-            points, target = points.cuda(), target.cuda()
             optimizer.zero_grad()
+            model.train()
 
-            model = model.train()
-            pred = model(points)
-            loss = criterion(pred, target.long())
-            pred_choice = pred.data.max(1)[1]
-            correct = pred_choice.eq(target.long().data).cpu().sum()
-            mean_correct.append(correct.item() / float(points.size()[0]))
+            pred_r, pred_t = model(points, centroid, scale)
+            loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation)
+            if torch.isnan(loss):
+                print(f"Epoch {epoch}, Batch {batch_idx}: NaN loss detected!")
+                print(f"pred_r: {pred_r}")
+                print(f"pred_t: {pred_t}")
+                print(f"gt_rotation: {gt_rotation}")
+                print(f"gt_translation: {gt_translation}")
+                break
+
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Limits gradient size
             optimizer.step()
+
+            total_loss += loss.item()
+            writer.add_scalar("Loss/train", loss.item(), global_step)  # Log to TensorBoard
+
             global_step += 1
 
-        train_instance_acc = np.mean(mean_correct)
-        log_string(f"Train Instance Accuracy: {train_instance_acc}")
+        avg_loss = total_loss / len(train_dl)
+        writer.add_scalar("Loss/epoch", avg_loss, epoch)
+        log_string(f"Train Loss: {avg_loss:.6f}")
 
+
+        ## Validation
         with torch.no_grad():
-            instance_acc, class_acc = test(model.eval(), test_dl, config)
+            total_val_loss = 0.0
+            for data in test_dl:
+                points, gt_pose, centroid, scale = data
 
-            if (instance_acc >= best_instance_acc):
-                best_instance_acc = instance_acc
-                best_epoch = epoch + 1
+                points = points.cuda()
+                points = points.transpose(1, 2) # points should have [B, C, N] format
+                gt_pose = gt_pose.cuda()
+                centroid = centroid.cuda()
+                scale = scale.cuda()
 
-            if (class_acc >= best_class_acc):
-                best_class_acc = class_acc
+                model.eval()
+                pred_r, pred_t = model(points, centroid, scale)
 
-            log_string(f"Test Instance Accuracy: {instance_acc}, Class Accuracy: {class_acc}")
-            log_string(f"Best Instance Accuracy: {best_instance_acc}, Class Accuracy: {best_class_acc}")
+                gt_rotation = gt_pose[:, :4]
+                gt_translation = gt_pose[:, 4:]
 
-            if (instance_acc >= best_instance_acc):
-                log_string('Save model...')
+                loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation)
+                total_val_loss += loss.item()
+
+            avg_val_loss = total_val_loss / len(test_dl)
+            log_string(f"Validation Loss: {avg_val_loss:.6f}")
+
+            # Save the best model based on lowest validation loss
+            if avg_val_loss < best_loss:
+                best_loss = avg_val_loss
                 savepath = str(experiment_dir) + '/best_model.pth'
-                log_string(f"Saving at {savepath}")
+                log_string(f"Saving best model at {savepath}")
+
                 state = {
-                    'epoch': best_epoch,
-                    'instance_acc': instance_acc,
-                    'class_acc': class_acc,
+                    'epoch': epoch + 1,
+                    'loss': avg_val_loss,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                 }
                 torch.save(state, savepath)
 
-            global_epoch += 1
-    
-    
+        global_epoch += 1
+        
+    writer.close()
 
 
 def test(model, loader, config):
@@ -233,4 +255,7 @@ def test(model, loader, config):
 
 
 if __name__ == '__main__':
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "GPU-1269cb21-9d60-0491-7532-ba286dee143b"
+    writer = SummaryWriter(log_dir="runs/pose_training")
+
     train()

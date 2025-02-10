@@ -48,6 +48,7 @@ def create_rFF3d(channel_list, num_points, dim):
 
     return rFF
 
+
 class PoseLoss(nn.Module):
     def __init__(self, alpha=1.0):
         """
@@ -59,66 +60,31 @@ class PoseLoss(nn.Module):
         super(PoseLoss, self).__init__()
         self.alpha = alpha  # Scaling factor for translation loss
 
-    def geodesic_loss(self, pred_r, gt_r):
+    def forward(self, pred_r, gt_q, pred_t, gt_t):
         """
-        Computes geodesic loss between predicted and ground truth rotations in axis-angle representation.
-        Converts axis-angle to rotation matrices and computes:
-        L_r = arccos( (trace(R_pred^T * R_gt) - 1) / 2 )
+        Compute total pose loss:
+        - Convert predicted axis-angle to rotation matrix.
+        - Convert ground truth quaternion to rotation matrix.
+        - Compute geodesic distance for rotation loss.
+        - Compute L2 loss for translation residual.
+
+        Inputs:
+        - pred_r: Predicted rotation in axis-angle (B, 3)
+        - gt_q: Ground truth rotation in quaternion (B, 4)
+        - pred_t: Predicted translation residual (B, 3)
+        - gt_t: Ground truth translation (B, 3)
+
+        Output:
+        - Total loss: geodesic loss + weighted translation loss
         """
+        # Convert ground truth quaternion to rotation matrix
+        R_gt = self.quaternion_to_rotation_matrix(gt_q)
 
-        # Convert axis-angle to rotation matrices
-        R_pred = self.axis_angle_to_rotation_matrix(pred_r)  # [B, 3, 3]
-        R_gt = self.axis_angle_to_rotation_matrix(gt_r)  # [B, 3, 3]
-
-        # Compute trace of (R_pred^T * R_gt)
-        trace_val = torch.einsum('bii->b', torch.matmul(R_pred.transpose(1, 2), R_gt))
-
-        # Clamp to avoid numerical errors leading to NaNs
-        trace_val = torch.clamp((trace_val - 1) / 2, -1.0, 1.0)
+        # Convert predicted axis-angle to rotation matrix
+        R_pred = self.axis_angle_to_rotation_matrix(pred_r)
 
         # Compute geodesic loss
-        loss_r = torch.acos(trace_val)
-
-        return loss_r.mean()
-
-    def axis_angle_to_rotation_matrix(self, axis_angle):
-        """
-        Converts axis-angle representation to rotation matrix using the Rodrigues formula.
-        Input: axis-angle tensor (B, 3)
-        Output: rotation matrix tensor (B, 3, 3)
-        """
-
-        theta = torch.norm(axis_angle, dim=1, keepdim=True)  # Rotation magnitude
-        eps = 1e-6
-        axis = axis_angle / (theta + eps)  # Normalize axis
-        theta = theta.squeeze(1)  # Shape [B]
-
-        # Create skew-symmetric cross-product matrix
-        zeros = torch.zeros_like(theta)
-        K = torch.stack([
-            zeros, -axis[:, 2], axis[:, 1],
-            axis[:, 2], zeros, -axis[:, 0],
-            -axis[:, 1], axis[:, 0], zeros
-        ], dim=1).reshape(-1, 3, 3)
-
-        I = torch.eye(3, device=axis.device).unsqueeze(0)  # Identity matrix
-
-        # Rodrigues' formula for rotation matrix
-        R = I + torch.sin(theta).unsqueeze(1) * K + (1 - torch.cos(theta)).unsqueeze(1) * torch.matmul(K, K)
-
-        return R
-
-    def forward(self, pred_r, gt_r, pred_t, gt_t):
-        """
-        Computes total loss:
-        L_total = α * L_t + L_r
-        where:
-        - L_r (rotation loss) = Geodesic distance loss
-        - L_t (translation loss) = L2 loss on translation residuals
-        """
-
-        # Compute rotation loss (geodesic loss)
-        loss_r = self.geodesic_loss(pred_r, gt_r)
+        loss_r = self.geodesic_loss(R_pred, R_gt)
 
         # Compute translation loss (L2 loss)
         loss_t = F.mse_loss(pred_t, gt_t)
@@ -128,6 +94,77 @@ class PoseLoss(nn.Module):
 
         return total_loss
 
+    def quaternion_to_rotation_matrix(self, q):
+        """
+        Converts a quaternion (B, 4) to a rotation matrix (B, 3, 3).
+        """
+        q = F.normalize(q, dim=-1)  # Ensure the quaternion is normalized
+        w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+
+        B = q.shape[0]
+        R = torch.zeros((B, 3, 3), device=q.device)
+
+        R[:, 0, 0] = 1 - 2 * (y**2 + z**2)
+        R[:, 0, 1] = 2 * (x * y - w * z)
+        R[:, 0, 2] = 2 * (x * z + w * y)
+        R[:, 1, 0] = 2 * (x * y + w * z)
+        R[:, 1, 1] = 1 - 2 * (x**2 + z**2)
+        R[:, 1, 2] = 2 * (y * z - w * x)
+        R[:, 2, 0] = 2 * (x * z - w * y)
+        R[:, 2, 1] = 2 * (y * z + w * x)
+        R[:, 2, 2] = 1 - 2 * (x**2 + y**2)
+
+        return R
+
+    def axis_angle_to_rotation_matrix(self, axis_angle):
+        """
+        Converts an axis-angle vector (B, 3) to a rotation matrix (B, 3, 3) using the exponential map.
+        
+        # Rodrigues' formula for rotation matrix with:
+
+                    axis_angle = r
+                    theta = ||r|| (2-norm)
+                    axis = r / ||r||
+        """
+        theta = torch.linalg.vector_norm(axis_angle, dim=1, keepdim=True)
+        eps = 1e-6
+        axis = axis_angle / (theta + eps)
+        theta = theta.squeeze(1)  # Shape [B]
+
+        zeros = torch.zeros_like(theta)
+        # K is already normalized from axis above, so no need to divide by theta like in the paper
+        K = torch.stack([
+            zeros, -axis[:, 2], axis[:, 1],
+            axis[:, 2], zeros, -axis[:, 0],
+            -axis[:, 1], axis[:, 0], zeros
+        ], dim=1).reshape(-1, 3, 3)
+
+        I = torch.eye(3, device=axis.device).unsqueeze(0)
+        sin_theta = torch.sin(theta).view(-1, 1, 1)  # (B, 1, 1)
+        cos_theta = (1 - torch.cos(theta)).view(-1, 1, 1)  # (B, 1, 1)
+
+        # Rodrigues' formula to rotation matrix
+        R = I + sin_theta * K + cos_theta * torch.matmul(K, K)
+
+        return R
+
+    def geodesic_loss(self, R_pred, R_gt):
+        """
+        Computes the geodesic loss between two rotation matrices.
+        Loss formula:
+        L_r = arccos( (trace(R_pred * R_gt^T) - 1) / 2 )
+        """
+
+        # Compute trace of (R_pred * R_gt^T)
+        trace_val = torch.einsum('bii->b', torch.matmul(R_pred, R_gt.transpose(1, 2))) #dim 0 is batch size
+
+        # Clamp to avoid numerical errors leading to NaNs
+        trace_val = torch.clamp((trace_val - 1) / 2, -1.0, 1.0)
+
+        # Compute geodesic loss
+        loss_r = torch.acos(trace_val)
+
+        return loss_r.mean()
 
  
 class Point_Transformer(nn.Module):
@@ -139,15 +176,14 @@ class Point_Transformer(nn.Module):
 
         self.p_dropout = config['dropout']
         self.norm_channel = config['use_labels']
-        print("Using labels:", self.norm_channel)
         self.input_dim = 13 if config['use_labels'] else 3
         self.num_sort_nets = config['M']
         self.top_k = config['K']
         self.d_model = config['d_m']
  
-
+        # TODO: try different radius values
         self.radius_max_points = 16
-        self.radius = 0.2
+        self.radius = 0.1
 
         ## Create rFF to project input points to latent feature space
         ## Local Feature Generation --> rFF
@@ -225,9 +261,8 @@ class Point_Transformer(nn.Module):
         ## Global Features 
         #############################################
         xyz = input
-
+        # print("xyz shape PT:", xyz.shape)  # [B, C, N]
         B, _, _ = xyz.shape
-        print("Input shape:", xyz.shape)
         
         if self.norm_channel:
             norm = xyz[:, 3:, :]
@@ -275,8 +310,8 @@ class Point_Transformer(nn.Module):
         radius_centroids = query_points.unsqueeze(dim=-2)
 
         # This corresponds to g^j
-        print("radius_centroids shape:", radius_centroids.shape)  # Expected [B, ?, 4]
-        print("radius_points shape before fix:", radius_points.shape)  # Expected [B, ?, 3]
+        # print("radius_centroids shape:", radius_centroids.shape)  # Expected [B, ?, 4]
+        # print("radius_points shape before fix:", radius_points.shape)  # Expected [B, ?, 3]
         radius_grouped = torch.cat([radius_centroids, radius_points], dim=-2).unsqueeze(dim=1)
 
         for i, radius_conv in enumerate(self.radius_cnn):
@@ -309,8 +344,10 @@ class Point_Transformer(nn.Module):
 
         # Predict translation residual (normalized space)
         predicted_translation_residual = self.translation_mlp(global_features)
-
-        # Convert translation residual back to world-space
+        # print(f"predicted_translation_residual.shape: {predicted_translation_residual.shape}")  # Should be (B, 3)
+        # print(f"scale.shape: {scale.shape}")  # Should be (B, 1)
+        # print(f"centroid.shape: {centroid.shape}")  # Should be (B, 3)
+        scale = scale.unsqueeze(1)  # Expands shape from (B,) to (B,1)
         predicted_translation = predicted_translation_residual * scale + centroid
 
         return predicted_rotation, predicted_translation
@@ -344,8 +381,6 @@ class SortNet(nn.Module):
 
         topk = torch.topk(sortvec, k=top_k, dim=-1)
         indices = topk.indices.squeeze()
-        print("SortNet indices shape:", indices.unsqueeze(0).shape)
-        print("SortNet input shape:", input.shape)
         sorted_input = index_points(input.permute(0,2,1), indices).permute(0,2,1)
         sorted_score = index_points(sortvec.permute(0,2,1), indices).permute(0,2,1)
 
@@ -496,8 +531,6 @@ def index_points(points, idx):
     Return:
         new_points:, indexed points data, [B, S, C]
     """
-    print("Index points shape:", points.shape) # Prints torch.Size([1, 1024, 3])
-    print("indices shape:", idx.shape)
     device = points.device
     B = points.shape[0]
     view_shape = list(idx.shape)

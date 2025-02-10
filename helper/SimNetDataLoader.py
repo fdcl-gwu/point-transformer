@@ -13,13 +13,13 @@ warnings.filterwarnings('ignore')
 def load_pose_file(filepath, to_quaternion=True):
     """Load pose data from a JSON-like format and convert to quaternion (if needed)."""
     with open(filepath, 'r') as f:
-        pose_data = json.load(f) # The output from stl_cloud_processing is in json format
+        pose_data = json.load(f)  # The output from stl_cloud_processing is in json format
     
     # Extract translation and quaternion
     translation = np.array([pose_data["x"], pose_data["y"], pose_data["z"]], dtype=np.float32)
-    quaternion = np.array([pose_data["qx"], pose_data["qy"], pose_data["qz"], pose_data["qw"]], dtype=np.float32)
+    quaternion = np.array([pose_data["qw"], pose_data["qx"], pose_data["qy"], pose_data["qz"]], dtype=np.float32)
     
-    return np.hstack((quaternion, translation))  # [qx, qy, qz, qw, tx, ty, tz]
+    return np.hstack((quaternion, translation))  # [qw, qx, qy, qz, tx, ty, tz]
 
 def pc_normalize(pc):
     """ Normalize the point cloud: center it and scale to unit sphere.
@@ -84,12 +84,12 @@ class SimNetDataLoader(Dataset):
             point_cloud[:, :3], centroid, scale = pc_normalize(point_cloud[:, :3])
 
             # Load the pose data
-            pose = load_pose_file(pose_path)
+            pose = load_pose_file(pose_path) # [qx, qy, qz, qw, tx, ty, tz]
 
             # If label_channel=False, only return xyz coordinates. Otherwise, uses xyzl with l between 0-9
             if not self.label_channel:
                 point_cloud = point_cloud[:, 0:3]
-                print("Not using label channel")
+                # print("Not using label channel")
 
             # Store in cache if limit is not exceeded
             if len(self.cache) < self.cache_size:
