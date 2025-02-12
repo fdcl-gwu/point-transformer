@@ -121,6 +121,7 @@ venv.bak/
 # Data directory
 data/
 log/
+runs/
 
 # Spyder project settings
 .spyderproject

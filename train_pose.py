@@ -14,10 +14,13 @@ from helper.optimizer import RangerVA
 import helper.provider as provider
 from torch.utils.tensorboard import SummaryWriter
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "GPU-1269cb21-9d60-0491-7532-ba286dee143b"
+torch.manual_seed(42)
+
 def train():
 
     # To check CUDA and PyTorch installation: $ conda list | grep 'pytorch\|cudatoolkit'
-    device_id = 1  # Change this to 1 to use the second GPU
+    device_id = 0  # Change this to 1 to use the second GPU
     torch.cuda.set_device(device_id)
 
     if torch.cuda.is_available():
@@ -81,6 +84,21 @@ def train():
     train_size = int(0.95 * len(dataset))  # 95% train, 5% test
     test_size = len(dataset) - train_size
     train_ds, test_ds = torch.utils.data.random_split(dataset, [train_size, test_size])
+
+    print(f"First 5 train samples: {[dataset.data_paths[i] for i in train_ds.indices[:5]]}")
+    print(f"First 5 test samples: {[dataset.data_paths[i] for i in test_ds.indices[:5]]}")
+
+    # Save filenames used in train and test splits
+    train_file = "train_files.txt"
+    test_file = "test_files.txt"
+
+    with open(train_file, "w") as f_train, open(test_file, "w") as f_test:
+        for i in train_ds.indices:
+            f_train.write(f"{dataset.data_paths[i][0]} {dataset.data_paths[i][1]}\n")  # Save point and pose file paths
+        for i in test_ds.indices:
+            f_test.write(f"{dataset.data_paths[i][0]} {dataset.data_paths[i][1]}\n")  # Save point and pose file paths
+
+    print(f"Train set saved to {train_file}, Test set saved to {test_file}")
 
     train_dl = torch.utils.data.DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=8)
     test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=8)
@@ -227,35 +245,11 @@ def train():
                 torch.save(state, savepath)
 
         global_epoch += 1
-        
+
     writer.close()
-
-
-def test(model, loader, config):
-    mean_correct = []
-    class_acc = np.zeros((config['num_classes'],3))
-    for j, data in tqdm(enumerate(loader), total=len(loader)):
-        points, target = data
-        target = target[:, 0]
-        points = points.transpose(2, 1)
-        points, target = points.cuda(), target.cuda()
-        classifier = model.eval()
-        pred = classifier(points)
-        pred_choice = pred.data.max(1)[1]
-        for cat in np.unique(target.cpu()):
-            classacc = pred_choice[target==cat].eq(target[target==cat].long().data).cpu().sum()
-            class_acc[cat,0]+= classacc.item()/float(points[target==cat].size()[0])
-            class_acc[cat,1]+=1
-        correct = pred_choice.eq(target.long().data).cpu().sum()
-        mean_correct.append(correct.item()/float(points.size()[0]))
-    class_acc[:,2] =  class_acc[:,0]/ class_acc[:,1]
-    class_acc = np.mean(class_acc[:,2])
-    instance_acc = np.mean(mean_correct)
-    return instance_acc, class_acc
-
+    
 
 if __name__ == '__main__':
-    # os.environ["CUDA_VISIBLE_DEVICES"] = "GPU-1269cb21-9d60-0491-7532-ba286dee143b"
     writer = SummaryWriter(log_dir="runs/pose_training")
 
     train()

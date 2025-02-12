@@ -70,7 +70,7 @@ class PoseLoss(nn.Module):
 
         Inputs:
         - pred_r: Predicted rotation in axis-angle (B, 3)
-        - gt_q: Ground truth rotation in quaternion (B, 4)
+        - gt_q: Ground truth rotation in quaternion (B, 4), wxyz format
         - pred_t: Predicted translation residual (B, 3)
         - gt_t: Ground truth translation (B, 3)
 
