@@ -7,7 +7,7 @@ import datetime
 import torch
 import numpy as np
 from tqdm import tqdm
-import model.pointtransformer_pose as pt_pose
+import model.pointtransformer_pose_t as pt_pose
 from helper.ScanNetDataLoader import ScanNetDataLoader
 from helper.SimNetDataLoader import SimNetDataLoader
 from helper.optimizer import RangerVA
@@ -177,19 +177,19 @@ def train():
             gt_pose = gt_pose.cuda() # gt_pose format: [qw, qx, qy, qz, tx, ty, tz]
             centroid = centroid.cuda()
             scale = scale.cuda()
-            gt_rotation = gt_pose[:, :4]  # Ground-truth quaternion (B,4)
+            # gt_rotation = gt_pose[:, :4]  # Ground-truth quaternion (B,4)
             gt_translation = gt_pose[:, 4:]  # Ground-truth translation (B,3)
 
             optimizer.zero_grad()
             model.train()
 
-            pred_r, pred_t = model(points, centroid, scale)
-            loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation)
+            pred_t = model(points, centroid, scale)
+            loss = pose_criterion(pred_t, gt_translation)
             if torch.isnan(loss):
                 print(f"Epoch {epoch}, Batch {batch_idx}: NaN loss detected!")
-                print(f"pred_r: {pred_r}")
+                # print(f"pred_r: {pred_r}")
                 print(f"pred_t: {pred_t}")
-                print(f"gt_rotation: {gt_rotation}")
+                # print(f"gt_rotation: {gt_rotation}")
                 print(f"gt_translation: {gt_translation}")
                 break
 
@@ -220,12 +220,12 @@ def train():
                 scale = scale.cuda()
 
                 model.eval()
-                pred_r, pred_t = model(points, centroid, scale)
+                pred_t = model(points, centroid, scale)
 
-                gt_rotation = gt_pose[:, :4]
+                # gt_rotation = gt_pose[:, :4]
                 gt_translation = gt_pose[:, 4:]
 
-                loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation)
+                loss = pose_criterion(pred_t, gt_translation)
                 total_val_loss += loss.item()
 
             avg_val_loss = total_val_loss / len(test_dl)

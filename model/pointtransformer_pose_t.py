@@ -62,7 +62,7 @@ class PoseLoss(nn.Module):
         self.alpha = alpha  # Scaling factor for translation loss
         self.beta = beta
 
-    def forward(self, pred_r, gt_q, pred_t, gt_t):
+    def forward(self, pred_t, gt_t):
         """
         Compute total pose loss:
         - Convert predicted axis-angle to rotation matrix.
@@ -79,20 +79,21 @@ class PoseLoss(nn.Module):
         Output:
         - Total loss: geodesic loss + weighted translation loss
         """
-        # Convert ground truth quaternion to rotation matrix
-        R_gt = self.quaternion_to_rotation_matrix(gt_q)
+        # # Convert ground truth quaternion to rotation matrix
+        # R_gt = self.quaternion_to_rotation_matrix(gt_q)
 
-        # Convert predicted axis-angle to rotation matrix
-        R_pred = self.axis_angle_to_rotation_matrix(pred_r)
+        # # Convert predicted axis-angle to rotation matrix
+        # R_pred = self.axis_angle_to_rotation_matrix(pred_r)
 
-        # Compute geodesic loss
-        loss_r = self.geodesic_loss(R_pred, R_gt)
+        # # Compute geodesic loss
+        # loss_r = self.geodesic_loss(R_pred, R_gt)
 
         # Compute translation loss (L2 loss)
         loss_t = F.mse_loss(pred_t, gt_t)
 
         # Total loss: weighted sum
-        total_loss = (self.alpha * loss_t) + (self.beta * loss_r)
+        # total_loss = (self.alpha * loss_t) + (self.beta * loss_r)
+        total_loss = self.alpha * loss_t #ONLY TRANSLATION LOSS
 
         return total_loss
 
@@ -230,18 +231,17 @@ class Point_Transformer(nn.Module):
         self.transformer_model = nn.Transformer(d_model=self.d_model,nhead=8, dim_feedforward=512, num_encoder_layers=1, num_decoder_layers=1, custom_decoder=self.custom_decoder)
         self.transformer_model.apply(init_weights)
 
-        # Create the pose estimation heads
         dim_flatten = out_dim * self.num_sort_nets * self.top_k  # The global feature vector
 
         ## Pose Estimation Heads
-        # Rotation Head (Outputs 3D axis-angle representation)
-        self.rotation_mlp = nn.Sequential(
-            nn.Linear(dim_flatten, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 3)  # Output: (3,) axis-angle
-        )
+        # # Rotation Head (Outputs 3D axis-angle representation)
+        # self.rotation_mlp = nn.Sequential(
+        #     nn.Linear(dim_flatten, 512),
+        #     nn.ReLU(),
+        #     nn.Linear(512, 256),
+        #     nn.ReLU(),
+        #     nn.Linear(256, 3)  # Output: (3,) axis-angle
+        # )
 
         # Translation Head (Outputs 3D residual translation)
         self.translation_mlp = nn.Sequential(
@@ -253,7 +253,7 @@ class Point_Transformer(nn.Module):
         )
 
         # Apply Weights Initialization
-        self.rotation_mlp.apply(init_weights)
+        # self.rotation_mlp.apply(init_weights)
         self.translation_mlp.apply(init_weights)
 
 
@@ -342,7 +342,7 @@ class Point_Transformer(nn.Module):
         global_features = torch.flatten(embedding, start_dim=1)  # [B, dim_flatten]
 
         # Predict rotation (axis-angle representation)
-        predicted_rotation = self.rotation_mlp(global_features)
+        # predicted_rotation = self.rotation_mlp(global_features)
 
         # Predict translation residual (normalized space)
         predicted_translation_residual = self.translation_mlp(global_features)
@@ -352,7 +352,7 @@ class Point_Transformer(nn.Module):
         scale = scale.unsqueeze(1)  # Expands shape from (B,) to (B,1)
         predicted_translation = predicted_translation_residual * scale + centroid
 
-        return predicted_rotation, predicted_translation
+        return predicted_translation
 
 
 class SortNet(nn.Module):
