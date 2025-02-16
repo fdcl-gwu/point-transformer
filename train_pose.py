@@ -14,7 +14,7 @@ from helper.optimizer import RangerVA
 import helper.provider as provider
 from torch.utils.tensorboard import SummaryWriter
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "GPU-1269cb21-9d60-0491-7532-ba286dee143b"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "GPU-1269cb21-9d60-0491-7532-ba286dee143b"
 torch.manual_seed(42)
 
 def train():
@@ -45,6 +45,10 @@ def train():
             'M': 4,
             'K': 64,
             'd_m': 512,
+            'alpha': 10,
+            'beta': 1,
+            'radius_max_points': 32,
+            'radius': 0.2
     }
 
     ## Create LogDir
@@ -139,7 +143,7 @@ def train():
     # exit()
 
     # alpha for translation loss, beta for rotation loss
-    pose_criterion = pt_pose.PoseLoss(alpha=10, beta=5).cuda()
+    pose_criterion = pt_pose.PoseLoss(config['alpha'], config['beta']).cuda()  # Loss just used for logging
     
     ## Create optimizer
     optimizer = None

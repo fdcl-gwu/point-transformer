@@ -60,7 +60,7 @@ class PoseLoss(nn.Module):
         """
         super(PoseLoss, self).__init__()
         self.alpha = alpha  # Scaling factor for translation loss
-        self.beta = beta
+        self.beta = beta # Scaling factor for rotation loss
 
     def forward(self, pred_r, gt_q, pred_t, gt_t):
         """
@@ -184,8 +184,8 @@ class Point_Transformer(nn.Module):
         self.d_model = config['d_m']
  
         # TODO: try different radius values
-        self.radius_max_points = 16
-        self.radius = 0.1
+        self.radius_max_points = config['radius_max_points']
+        self.radius = config['radius']
 
         ## Create rFF to project input points to latent feature space
         ## Local Feature Generation --> rFF
@@ -296,6 +296,7 @@ class Point_Transformer(nn.Module):
         x_local = x_local.permute(1,2,0)
         x_local = x_local.unsqueeze(dim=1)
         # Concatenate outputs of SortNet
+        # TODO: save these top K points for visualization
         x_local_sorted = torch.cat([sortnet(x_local, input)[0] for sortnet in self.sortnets], dim=-1)
 
         # this corresponds to s^j_i

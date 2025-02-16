@@ -45,6 +45,10 @@ def test():
             'M': 4,
             'K': 64,
             'd_m': 512,
+            'alpha': 10,
+            'beta': 1,
+            'radius_max_points': 32,
+            'radius': 0.2
     }
 
     # Create inference log directory
@@ -97,14 +101,14 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-02-12_11-55/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-02-13_16-30/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights
     model.eval()
     print(f"Loaded best model from {checkpoint_path}, trained until epoch {checkpoint['epoch']}")
 
-    pose_criterion = pt_pose.PoseLoss(alpha=10).cuda() #Loss just used for logging
+    pose_criterion = pt_pose.PoseLoss(config['alpha'], config['beta']).cuda() #Loss just used for logging
 
     result_data = []
 
