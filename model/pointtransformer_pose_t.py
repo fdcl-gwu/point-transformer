@@ -60,7 +60,7 @@ class PoseLoss(nn.Module):
         """
         super(PoseLoss, self).__init__()
         self.alpha = alpha  # Scaling factor for translation loss
-        self.beta = beta
+        self.beta = beta    # Scaling factor for rotation loss
 
     def forward(self, pred_t, gt_t):
         """
@@ -185,8 +185,8 @@ class Point_Transformer(nn.Module):
         self.d_model = config['d_m']
  
         # TODO: try different radius values
-        self.radius_max_points = 16
-        self.radius = 0.1
+        self.radius_max_points = config['radius_max_points']
+        self.radius = config['radius']
 
         ## Create rFF to project input points to latent feature space
         ## Local Feature Generation --> rFF
@@ -245,7 +245,7 @@ class Point_Transformer(nn.Module):
 
         # Translation Head (Outputs 3D residual translation)
         self.translation_mlp = nn.Sequential(
-            nn.Linear(dim_flatten, 512),
+            nn.Linear(dim_flatten+1, 512),
             nn.ReLU(),
             nn.Linear(512, 256),
             nn.ReLU(),
@@ -340,16 +340,11 @@ class Point_Transformer(nn.Module):
 
         # Flatten the feature vector for MLP heads
         global_features = torch.flatten(embedding, start_dim=1)  # [B, dim_flatten]
-
-        # Predict rotation (axis-angle representation)
-        # predicted_rotation = self.rotation_mlp(global_features)
-
+        if scale.dim() == 1:
+            scale = scale.unsqueeze(1)  # Expands shape from [B] to [B, 1]
         # Predict translation residual (normalized space)
-        predicted_translation_residual = self.translation_mlp(global_features)
-        # print(f"predicted_translation_residual.shape: {predicted_translation_residual.shape}")  # Should be (B, 3)
-        # print(f"scale.shape: {scale.shape}")  # Should be (B, 1)
-        # print(f"centroid.shape: {centroid.shape}")  # Should be (B, 3)
-        scale = scale.unsqueeze(1)  # Expands shape from (B,) to (B,1)
+        translation_input = torch.cat([global_features, scale], dim=1)
+        predicted_translation_residual = self.translation_mlp(translation_input)
         predicted_translation = predicted_translation_residual * scale + centroid
 
         return predicted_translation

@@ -14,7 +14,6 @@ from helper.optimizer import RangerVA
 import helper.provider as provider
 from torch.utils.tensorboard import SummaryWriter
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "GPU-1269cb21-9d60-0491-7532-ba286dee143b"
 torch.manual_seed(42)
 
 def train():
@@ -45,6 +44,11 @@ def train():
             'M': 4,
             'K': 64,
             'd_m': 512,
+            'alpha': 10,
+            'beta': 1,
+            'radius_max_points': 32,
+            'radius': 0.2,
+            'unit_sphere': True
     }
 
     ## Create LogDir
@@ -78,7 +82,7 @@ def train():
 
     # UNCOMMENT FOR SimNet
     data_path = 'data/SimNet'
-    dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'])
+    dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio
     train_size = int(0.95 * len(dataset))  # 95% train, 5% test
@@ -117,8 +121,8 @@ def train():
 
     # Instaed of letting summary() create the batch size, manually create dummy inputs
     dummy_input = torch.randn(2, 3, 1024).cuda()
-    dummy_centroid = torch.zeros(1, 3).cuda()  # Centroid (batch, 3)
-    dummy_scale = torch.ones(1, 1).cuda()  # Scale factor (batch, 1)
+    dummy_centroid = torch.zeros(2, 3).cuda()  # Centroid (batch, 3)
+    dummy_scale = torch.ones(2, 1).cuda()  # Scale factor (batch, 1)
 
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 

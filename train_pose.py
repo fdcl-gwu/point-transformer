@@ -20,7 +20,7 @@ torch.manual_seed(42)
 def train():
 
     # To check CUDA and PyTorch installation: $ conda list | grep 'pytorch\|cudatoolkit'
-    device_id = 0  # Change this to 1 to use the second GPU
+    device_id = 1  # Change this to 1 to use the second GPU
     torch.cuda.set_device(device_id)
 
     if torch.cuda.is_available():
@@ -48,7 +48,8 @@ def train():
             'alpha': 10,
             'beta': 1,
             'radius_max_points': 32,
-            'radius': 0.2
+            'radius': 0.2,
+            'unit_sphere': True
     }
 
     ## Create LogDir
@@ -81,8 +82,8 @@ def train():
     # dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'])
 
     # UNCOMMENT FOR SimNet
-    data_path = 'data/SimNet'
-    dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'])
+    data_path = 'data/SimNet2'
+    dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio
     train_size = int(0.95 * len(dataset))  # 95% train, 5% test
@@ -111,7 +112,7 @@ def train():
 
     ## Create Point Transformer model
     model = pt_pose.Point_Transformer(config).cuda()
-    # model = pt_pose.SortNet(128,6, top_k=64).cuda()
+    # model = pt_pose.SortNet(128/home/karlsimon/point-transformer/log/pose_estimation/2025-02-16_18-53,6, top_k=64).cuda()
     
     def count_parameters(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -121,8 +122,11 @@ def train():
 
     # Instaed of letting summary() create the batch size, manually create dummy inputs
     dummy_input = torch.randn(2, 3, 1024).cuda()
-    dummy_centroid = torch.zeros(1, 3).cuda()  # Centroid (batch, 3)
-    dummy_scale = torch.ones(1, 1).cuda()  # Scale factor (batch, 1)
+    dummy_centroid = torch.zeros(2, 3).cuda()  # Centroid (batch, 3)
+    if config['unit_sphere']:
+        dummy_scale = torch.ones(2, 1).cuda()  # Scale factor (batch, 1)
+    else:
+        dummy_scale = torch.tensor([[2.0], [3.0]]).cuda()  # Scale factor (batch, 1)
 
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 

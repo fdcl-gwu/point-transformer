@@ -21,7 +21,7 @@ def load_pose_file(filepath, to_quaternion=True):
     
     return np.hstack((quaternion, translation))  # [qw, qx, qy, qz, tx, ty, tz]
 
-def pc_normalize(pc):
+def pc_normalize(pc, unit_sphere=True):
     """ Normalize the point cloud: center it and scale to unit sphere.
         Also return centroid and scale for later use in pose estimation.
     """
@@ -29,19 +29,21 @@ def pc_normalize(pc):
     pc = pc - centroid  # Center the cloud
 
     scale = np.max(np.sqrt(np.sum(pc**2, axis=1)))  # Compute scale (radius)
-    pc = pc / scale  # Normalize to unit sphere
+    if unit_sphere:
+        pc = pc / scale # Scale to unit sphere
 
     return pc, centroid, scale  # Return normalized cloud, centroid, and scale
 
 
 class SimNetDataLoader(Dataset):
-    def __init__(self, root,  npoint=1024, uniform=False, label_channel=False, cache_size=15000):
+    def __init__(self, root,  npoint=1024, uniform=False, label_channel=False, cache_size=15000, unit_sphere=True):
         self.root = root # /data/SimNet
         self.npoints = npoint # 1024
         self.uniform = uniform
         self.label_channel = label_channel
         self.cache_size = cache_size  # how many data points to cache in memory
         self.cache = {}  # from index to (points, poses) tuple
+        self.unit_sphere = unit_sphere
 
         self.data_paths = []
         scan_dirs = [os.path.join(root, d) for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))] # scan_dirs will look like this: ['/data/SimNet/datset1', '/data/SimNet/datset2', ...]
@@ -81,7 +83,7 @@ class SimNetDataLoader(Dataset):
 
             # NOTE: no FPS for Gazebo scans. done in dataset preprocessing
             point_cloud = point_cloud[:self.npoints, :]
-            point_cloud[:, :3], centroid, scale = pc_normalize(point_cloud[:, :3])
+            point_cloud[:, :3], centroid, scale = pc_normalize(point_cloud[:, :3], self.unit_sphere)
 
             # Load the pose data
             pose = load_pose_file(pose_path) # [qx, qy, qz, qw, tx, ty, tz]

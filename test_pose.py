@@ -45,10 +45,11 @@ def test():
             'M': 4,
             'K': 64,
             'd_m': 512,
-            'alpha': 10,
-            'beta': 1,
+            'alpha': 20,
+            'beta': 2,
             'radius_max_points': 32,
-            'radius': 0.2
+            'radius': 0.2,
+            'unit_sphere': True
     }
 
     # Create inference log directory
@@ -75,7 +76,7 @@ def test():
         logger.info(f"Pose Estimation Loss: {loss:.6f}\n")
  
     data_path = 'data/SimNet'
-    dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'])
+    dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio
     train_size = int(0.95 * len(dataset))  # 95% train, 5% test
@@ -101,7 +102,7 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-02-13_16-30/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-02-19_21-27/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights

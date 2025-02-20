@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import math
-from .pointnet_util import PointNetSetAbstractionMsg, PointNetSetAbstraction
+from .pointnet_util import DynamicPointNetSetAbstractionMsg, PointNetSetAbstractionMsg, PointNetSetAbstraction
 
 
 #Mish - "Mish: A Self Regularized Non-Monotonic Neural Activation Function"
@@ -182,6 +182,7 @@ class Point_Transformer(nn.Module):
         self.num_sort_nets = config['M']
         self.top_k = config['K']
         self.d_model = config['d_m']
+        self.unit_sphere = config['unit_sphere']
  
         # TODO: try different radius values
         self.radius_max_points = config['radius_max_points']
@@ -218,9 +219,13 @@ class Point_Transformer(nn.Module):
         out_points = 128
         in_channel = 3 if self.norm_channel else 0 
 
-        self.sa1 = PointNetSetAbstractionMsg(256, [0.1, 0.2, 0.4], [16, 32, 64], in_channel, [[32, 32, 64], [64, 64, 128], [64, 96, 128]])
-        self.sa2 = PointNetSetAbstractionMsg(out_points, [0.2, 0.4, 0.6], [32, 64, 128], 320,[[32, 64, 128], [64, 64, 128], [64, 128, 253]])
-
+        if self.unit_sphere:
+            self.sa1 = PointNetSetAbstractionMsg(256, [0.1, 0.2, 0.4], [16, 32, 64], in_channel, [[32, 32, 64], [64, 64, 128], [64, 96, 128]])
+            self.sa2 = PointNetSetAbstractionMsg(out_points, [0.2, 0.4, 0.6], [32, 64, 128], 320,[[32, 64, 128], [64, 64, 128], [64, 128, 253]])
+        else:
+            self.sa1 = DynamicPointNetSetAbstractionMsg(256, [16, 32, 64], in_channel, [[32, 32, 64], [64, 64, 128], [64, 96, 128]])
+            self.sa2 = DynamicPointNetSetAbstractionMsg(out_points, [32, 64, 128], 320,[[32, 64, 128], [64, 64, 128], [64, 128, 253]])
+    
         ## Create Local-Global Attention
         ##  A^LG
         out_dim = 64
@@ -272,10 +277,23 @@ class Point_Transformer(nn.Module):
         else:
             norm = None
 
-        ## Set Abstraction with MSG
-        l1_xyz, l1_points = self.sa1(xyz, norm)
-        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
-        global_feat = torch.cat([l2_xyz, l2_points], dim=1)
+        if self.unit_sphere:
+            ## Set Abstraction with MSG
+            l1_xyz, l1_points = self.sa1(xyz, norm)
+            l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
+            global_feat = torch.cat([l2_xyz, l2_points], dim=1)
+        else:
+            ## Compute dynamic radii per batch
+            base_radii = [0.1, 0.2, 0.4]  # Original MSG radii
+            adjusted_radii = torch.tensor(base_radii, device=scale.device, dtype=scale.dtype) * scale.view(-1, 1)
+            print(f"adjusted_radii: {adjusted_radii}, and scale: {scale}")
+
+            ## Set Abstraction with MSG
+            print(f"xyz: {xyz.shape}")
+            l1_xyz, l1_points = self.sa1(xyz, norm, adjusted_radii)
+            print(f"l1_xyz: {l1_xyz.shape}, l1_points: {l1_points.shape}")
+            l2_xyz, l2_points = self.sa2(l1_xyz, l1_points, adjusted_radii)
+            global_feat = torch.cat([l2_xyz, l2_points], dim=1)
 
         #############################################
         ## Local Features
