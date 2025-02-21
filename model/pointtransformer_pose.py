@@ -89,7 +89,8 @@ class PoseLoss(nn.Module):
         loss_r = self.geodesic_loss(R_pred, R_gt)
 
         # Compute translation loss (L2 loss)
-        loss_t = F.mse_loss(pred_t, gt_t)
+        # loss_t = F.mse_loss(pred_t, gt_t)
+        loss_t = torch.linalg.vector_norm(pred_t - gt_t, ord=2, dim=-1).mean()
 
         # Total loss: weighted sum
         total_loss = (self.alpha * loss_t) + (self.beta * loss_r)

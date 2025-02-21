@@ -40,15 +40,15 @@ def train():
             'optimizer': 'RangerVA',
             'lr': 0.0005,
             'decay_rate': 1e-06,
-            'epochs': 100,
+            'epochs': 60,
             'dropout': 0.4,
             'M': 4,
             'K': 64,
             'd_m': 512,
             'alpha': 10,
             'beta': 1,
-            'radius_max_points': 32,
-            'radius': 0.2,
+            'radius_max_points': 16,
+            'radius': 0.1,
             'unit_sphere': True
     }
 
@@ -82,7 +82,7 @@ def train():
     # dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'])
 
     # UNCOMMENT FOR SimNet
-    data_path = 'data/SimNet2'
+    data_path = 'data/SimNet'
     dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio

@@ -20,7 +20,7 @@ torch.manual_seed(42)
 def test():
 
     # To check CUDA and PyTorch installation: $ conda list | grep 'pytorch\|cudatoolkit'
-    device_id = 0  # Change this to 1 to use the second GPU
+    device_id = 1  # Change this to 1 to use the second GPU
     torch.cuda.set_device(device_id)
 
     if torch.cuda.is_available():
@@ -38,15 +38,15 @@ def test():
             'batch_size': 11,
             'use_labels': False,
             'optimizer': 'RangerVA',
-            'lr': 0.0005,
+            'lr': 0.001,
             'decay_rate': 1e-06,
             'epochs': 100,
             'dropout': 0.4,
             'M': 4,
             'K': 64,
             'd_m': 512,
-            'alpha': 20,
-            'beta': 2,
+            'alpha': 10,
+            'beta': 1,
             'radius_max_points': 32,
             'radius': 0.2,
             'unit_sphere': True
@@ -102,7 +102,7 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-02-19_21-27/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-02-20_21-50/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights
