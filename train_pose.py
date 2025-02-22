@@ -20,7 +20,7 @@ torch.manual_seed(42)
 def train():
 
     # To check CUDA and PyTorch installation: $ conda list | grep 'pytorch\|cudatoolkit'
-    device_id = 1  # Change this to 1 to use the second GPU
+    device_id = 0  # Change this to 1 to use the second GPU
     torch.cuda.set_device(device_id)
 
     if torch.cuda.is_available():
@@ -47,8 +47,8 @@ def train():
             'd_m': 512,
             'alpha': 10,
             'beta': 1,
-            'radius_max_points': 16,
-            'radius': 0.1,
+            'radius_max_points': 32,
+            'radius': 0.2,
             'unit_sphere': True
     }
 

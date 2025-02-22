@@ -38,7 +38,7 @@ def test():
             'batch_size': 11,
             'use_labels': False,
             'optimizer': 'RangerVA',
-            'lr': 0.001,
+            'lr': 0.0005,
             'decay_rate': 1e-06,
             'epochs': 100,
             'dropout': 0.4,
@@ -102,7 +102,7 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-02-20_21-50/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-02-19_23-05/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights
