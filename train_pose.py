@@ -20,7 +20,7 @@ torch.manual_seed(42)
 def train():
 
     # To check CUDA and PyTorch installation: $ conda list | grep 'pytorch\|cudatoolkit'
-    device_id = 0  # Change this to 1 to use the second GPU
+    device_id = 1  # Change this to 1 to use the second GPU
     torch.cuda.set_device(device_id)
 
     if torch.cuda.is_available():
@@ -38,9 +38,9 @@ def train():
             'batch_size': 11,
             'use_labels': False,
             'optimizer': 'RangerVA',
-            'lr': 0.0005,
+            'lr': 0.001,
             'decay_rate': 1e-06,
-            'epochs': 60,
+            'epochs': 70,
             'dropout': 0.4,
             'M': 4,
             'K': 64,
@@ -82,7 +82,7 @@ def train():
     # dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'])
 
     # UNCOMMENT FOR SimNet
-    data_path = 'data/SimNet'
+    data_path = 'data/SimNet15'
     dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio
@@ -169,7 +169,7 @@ def train():
     best_loss = float("inf")
             
     ## Learning Rate Scheduler
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.5)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.5)
     
     for epoch in range(config['epochs']):
         log_string(f"Epoch {epoch}/{config['epochs']}")
@@ -191,8 +191,8 @@ def train():
             optimizer.zero_grad()
             model.train()
 
-            pred_r, pred_t = model(points, centroid, scale)
-            loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation)
+            pred_r, pred_t, pred_scale = model(points, centroid, scale)
+            loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation, pred_scale, scale)
             if torch.isnan(loss):
                 print(f"Epoch {epoch}, Batch {batch_idx}: NaN loss detected!")
                 print(f"pred_r: {pred_r}")
@@ -228,12 +228,12 @@ def train():
                 scale = scale.cuda()
 
                 model.eval()
-                pred_r, pred_t = model(points, centroid, scale)
+                pred_r, pred_t, pred_scale = model(points, centroid, scale)
 
                 gt_rotation = gt_pose[:, :4]
                 gt_translation = gt_pose[:, 4:]
 
-                loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation)
+                loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation, pred_scale, scale)
                 total_val_loss += loss.item()
 
             avg_val_loss = total_val_loss / len(test_dl)
