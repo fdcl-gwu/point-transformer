@@ -25,6 +25,7 @@ def pc_normalize(pc, unit_sphere=True):
     """ Normalize the point cloud: center it and scale to unit sphere.
         Also return centroid and scale for later use in pose estimation.
     """
+
     centroid = np.mean(pc, axis=0)  # Compute centroid
     pc = pc - centroid  # Center the cloud
 
@@ -88,7 +89,7 @@ class SimNetDataLoader(Dataset):
             # Load the pose data
             pose = load_pose_file(pose_path) # [qx, qy, qz, qw, tx, ty, tz]
 
-            # If label_channel=False, only return xyz coordinates. Otherwise, uses xyzl with l between 0-9
+            # If label_channel=False, only return xyz coordinates. Otherwise, uses labels as remaining channels
             if not self.label_channel:
                 point_cloud = point_cloud[:, 0:3]
                 # print("Not using label channel")
