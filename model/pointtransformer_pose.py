@@ -62,7 +62,7 @@ class PoseLoss(nn.Module):
         self.alpha = alpha  # Scaling factor for translation loss
         self.beta = beta # Scaling factor for rotation loss
 
-    def forward(self, pred_r, gt_q, pred_t, gt_t, pred_scale, gt_scale):
+    def forward(self, pred_r, gt_q, pred_t, gt_t):
         """
         Compute total pose loss:
         - Convert predicted axis-angle to rotation matrix.
@@ -85,18 +85,14 @@ class PoseLoss(nn.Module):
         # Convert predicted axis-angle to rotation matrix
         R_pred = self.axis_angle_to_rotation_matrix(pred_r)
 
-        # Compute geodesic loss
+        # Compute geodesic loss for rotation
         loss_r = self.geodesic_loss(R_pred, R_gt)
 
-        # Compute scale loss (squared L2 loss)
-        loss_scale = F.mse_loss(pred_scale, gt_scale)
-
-        # Compute translation loss (L2 loss)
-        # loss_t = F.mse_loss(pred_t, gt_t)
+        # Compute L2 loss for translation (as before)
         loss_t = torch.linalg.vector_norm(pred_t - gt_t, ord=2, dim=-1).mean()
 
-        # Total loss: weighted sum
-        total_loss = (self.alpha * loss_t) + (self.beta * loss_r) + loss_scale
+        # Weighted total loss
+        total_loss = (self.alpha * loss_t) + (self.beta * loss_r)
 
         return total_loss
 
@@ -261,17 +257,9 @@ class Point_Transformer(nn.Module):
             nn.Linear(256, 3)  # Output: (3,) translation residual
         )
 
-        self.scale_mlp = nn.Sequential(
-            nn.Linear(dim_flatten, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 1)  # Output: scalar scale value
-        )
         # Apply Weights Initialization
         self.rotation_mlp.apply(init_weights)
         self.translation_mlp.apply(init_weights)
-        self.scale_mlp.apply(init_weights)
 
 
     def forward(self, input, centroid, scale):
@@ -381,15 +369,10 @@ class Point_Transformer(nn.Module):
         # print(f"scale.shape: {scale.shape}")  # Should be (B, 1)
         # print(f"centroid.shape: {centroid.shape}")  # Should be (B, 3)
 
-        # Predict scale (absolute space)
-        # NOTE: if you want to predict scale residual, you must normalize 'scale' beforehand
-        predicted_scale = self.scale_mlp(global_features)
-
         scale = scale.unsqueeze(1)  # Expands shape from (B,) to (B,1)
-        # predicted_translation = predicted_translation_residual * scale + centroid
-        predicted_translation = predicted_translation_residual * predicted_scale + centroid
+        predicted_translation = predicted_translation_residual * scale + centroid
 
-        return predicted_rotation, predicted_translation, predicted_scale
+        return predicted_rotation, predicted_translation
 
 
 class SortNet(nn.Module):
@@ -660,4 +643,3 @@ def sample_and_group(npoint, radius, nsample, xyz, points, returnfps=False):
         return new_xyz, new_points, grouped_xyz, fps_idx
     else:
         return new_xyz, new_points
-

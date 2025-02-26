@@ -40,7 +40,7 @@ def test():
             'optimizer': 'RangerVA',
             'lr': 0.001,
             'decay_rate': 1e-06,
-            'epochs': 100,
+            'epochs': 60,
             'dropout': 0.4,
             'M': 4,
             'K': 64,

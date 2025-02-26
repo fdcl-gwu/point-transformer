@@ -40,7 +40,7 @@ def train():
             'optimizer': 'RangerVA',
             'lr': 0.001,
             'decay_rate': 1e-06,
-            'epochs': 70,
+            'epochs': 60,
             'dropout': 0.4,
             'M': 4,
             'K': 64,
@@ -82,7 +82,7 @@ def train():
     # dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'])
 
     # UNCOMMENT FOR SimNet
-    data_path = 'data/SimNet15'
+    data_path = 'data/SimNet'
     dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio
@@ -191,8 +191,8 @@ def train():
             optimizer.zero_grad()
             model.train()
 
-            pred_r, pred_t, pred_scale = model(points, centroid, scale)
-            loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation, pred_scale, scale)
+            pred_r, pred_t = model(points, centroid, scale)
+            loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation)
             if torch.isnan(loss):
                 print(f"Epoch {epoch}, Batch {batch_idx}: NaN loss detected!")
                 print(f"pred_r: {pred_r}")
@@ -228,12 +228,12 @@ def train():
                 scale = scale.cuda()
 
                 model.eval()
-                pred_r, pred_t, pred_scale = model(points, centroid, scale)
+                pred_r, pred_t = model(points, centroid, scale)
 
                 gt_rotation = gt_pose[:, :4]
                 gt_translation = gt_pose[:, 4:]
 
-                loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation, pred_scale, scale)
+                loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation)
                 total_val_loss += loss.item()
 
             avg_val_loss = total_val_loss / len(test_dl)
