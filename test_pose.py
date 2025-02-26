@@ -124,12 +124,12 @@ def test():
             scale = scale.cuda()
 
             model.eval()
-            pred_r, pred_t, pred_scale = model(points, centroid, scale)
+            pred_r, pred_t = model(points, centroid)
 
             gt_rotation = gt_pose[:, :4] #still in WXYZ (as dataset stores it)
             gt_translation = gt_pose[:, 4:]
 
-            loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation, pred_scale, scale).item()  # Computed for the batch
+            loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation).item()  # Computed for the batch
 
             # Convert angle-axis to quaternion for logging
             pred_r_np = pred_r.cpu().numpy()
