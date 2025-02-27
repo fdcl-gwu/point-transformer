@@ -40,13 +40,14 @@ def test():
             'optimizer': 'RangerVA',
             'lr': 0.001,
             'decay_rate': 1e-06,
-            'epochs': 100,
+            'epochs': 60,
             'dropout': 0.4,
             'M': 4,
             'K': 64,
             'd_m': 512,
             'alpha': 10,
             'beta': 1,
+            'gamma': 1,
             'radius_max_points': 32,
             'radius': 0.2,
             'unit_sphere': True
@@ -102,14 +103,18 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-02-25_13-35/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-02-26_17-54/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
+
+    # Prepare ground-truth ship point cloud
+    ship_cloud = np.loadtxt("/home/karlsimon/point-transformer/data/rotated_Ship_copy_downsampled_neg05.txt").astype(np.float32)
+    ship_cloud = torch.from_numpy(ship_cloud).cuda()
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights
     model.eval()
     print(f"Loaded best model from {checkpoint_path}, trained until epoch {checkpoint['epoch']}")
 
-    pose_criterion = pt_pose.PoseLoss(config['alpha'], config['beta']).cuda() #Loss just used for logging
+    pose_criterion = pt_pose.PoseLoss(config['alpha'], config['beta'], config['gamma']).cuda() #Loss just used for logging
 
     result_data = []
 
@@ -124,12 +129,12 @@ def test():
             scale = scale.cuda()
 
             model.eval()
-            pred_r, pred_t = model(points, centroid)
+            pred_r, pred_t = model(points, centroid, scale)
 
             gt_rotation = gt_pose[:, :4] #still in WXYZ (as dataset stores it)
             gt_translation = gt_pose[:, 4:]
 
-            loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation).item()  # Computed for the batch
+            loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation, points, ship_cloud, 1).item()  # Computed for the batch
 
             # Convert angle-axis to quaternion for logging
             pred_r_np = pred_r.cpu().numpy()

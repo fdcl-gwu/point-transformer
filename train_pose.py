@@ -20,7 +20,7 @@ torch.manual_seed(42)
 def train():
 
     # To check CUDA and PyTorch installation: $ conda list | grep 'pytorch\|cudatoolkit'
-    device_id = 1  # Change this to 1 to use the second GPU
+    device_id = 0  # Change this to 1 to use the second GPU
     torch.cuda.set_device(device_id)
 
     if torch.cuda.is_available():
@@ -47,6 +47,7 @@ def train():
             'd_m': 512,
             'alpha': 10,
             'beta': 1,
+            'gamma': 0.1,
             'radius_max_points': 32,
             'radius': 0.2,
             'unit_sphere': True
@@ -147,7 +148,7 @@ def train():
     # exit()
 
     # alpha for translation loss, beta for rotation loss
-    pose_criterion = pt_pose.PoseLoss(config['alpha'], config['beta']).cuda()  # Loss just used for logging
+    pose_criterion = pt_pose.PoseLoss(config['alpha'], config['beta'], config['gamma']).cuda()  # Loss just used for logging
     
     ## Create optimizer
     optimizer = None
@@ -168,6 +169,10 @@ def train():
     global_step = 0
     best_loss = float("inf")
             
+    # Prepare ground-truth ship point cloud
+    ship_cloud = np.loadtxt("/home/karlsimon/point-transformer/data/rotated_Ship_copy_downsampled_neg05.txt").astype(np.float32)
+    ship_cloud = torch.from_numpy(ship_cloud).cuda()
+
     ## Learning Rate Scheduler
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.5)
     
@@ -192,7 +197,7 @@ def train():
             model.train()
 
             pred_r, pred_t = model(points, centroid, scale)
-            loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation)
+            loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation, points, ship_cloud, epoch)
             if torch.isnan(loss):
                 print(f"Epoch {epoch}, Batch {batch_idx}: NaN loss detected!")
                 print(f"pred_r: {pred_r}")
@@ -233,7 +238,7 @@ def train():
                 gt_rotation = gt_pose[:, :4]
                 gt_translation = gt_pose[:, 4:]
 
-                loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation)
+                loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation, points, ship_cloud, epoch)
                 total_val_loss += loss.item()
 
             avg_val_loss = total_val_loss / len(test_dl)

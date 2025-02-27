@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from pytorch3d.loss import chamfer_distance
 import math
 from .pointnet_util import DynamicPointNetSetAbstractionMsg, PointNetSetAbstractionMsg, PointNetSetAbstraction
 
@@ -50,7 +51,7 @@ def create_rFF3d(channel_list, num_points, dim):
 
 
 class PoseLoss(nn.Module):
-    def __init__(self, alpha=1.0, beta=1.0):
+    def __init__(self, alpha=1.0, beta=1.0, gamma=1.0):
         """
         Pose loss for 6DOF estimation using:
         - Geodesic loss for rotation (axis-angle representation)
@@ -61,8 +62,9 @@ class PoseLoss(nn.Module):
         super(PoseLoss, self).__init__()
         self.alpha = alpha  # Scaling factor for translation loss
         self.beta = beta # Scaling factor for rotation loss
+        self.gamma = gamma  # Scaling factor for alignment loss
 
-    def forward(self, pred_r, gt_q, pred_t, gt_t):
+    def forward(self, pred_r, gt_q, pred_t, gt_t, scan, ship, epoch):
         """
         Compute total pose loss:
         - Convert predicted axis-angle to rotation matrix.
@@ -91,8 +93,23 @@ class PoseLoss(nn.Module):
         # Compute L2 loss for translation (as before)
         loss_t = torch.linalg.vector_norm(pred_t - gt_t, ord=2, dim=-1).mean()
 
+        # Apply transformation to scan cloud using predicted pose
+        pred_t = pred_t.unsqueeze(1)  # Reshape to (B, 1, 3) for broadcasting
+        # print(f"pred_t.shape: {pred_t.shape}, scan.shape: {scan.shape}, R_pred.shape: {R_pred.shape}")
+        scan_transformed = torch.matmul(scan.transpose(-1, -2), R_pred.transpose(-1, -2)) + pred_t
+        ship = ship.unsqueeze(0).expand(scan_transformed.shape[0], -1, -1) # give ship the same batch size as scan_transformed
+       
+        # Compute Chamfer Distance loss only if epoch > 20
+        loss_align = 0
+        if epoch > 5:
+            loss_align, _ = chamfer_distance(scan_transformed, ship)
+
         # Weighted total loss
-        total_loss = (self.alpha * loss_t) + (self.beta * loss_r)
+        total_loss = (self.alpha * loss_t) + (self.beta * loss_r) + (self.gamma * loss_align)
+
+        # with open("Poselosses.txt", "a") as f:
+        #     f.write(f"Losses: loss_t: {loss_t}, loss_r: {loss_r}, gamma: {loss_align}\n")
+        #     f.write(f"Total loss: {total_loss}\n")
 
         return total_loss
 
