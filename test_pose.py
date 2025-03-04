@@ -75,7 +75,7 @@ def test():
         logger.info(f"Ground Truth Translation: {gt_translation}")
         logger.info(f"Pose Estimation Loss: {loss:.6f}\n")
  
-    data_path = 'data/SimNet'
+    data_path = 'data/SimNet_merged'
     dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio
@@ -102,7 +102,7 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-02-27_12-11/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-03-03_14-23/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights

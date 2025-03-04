@@ -2,9 +2,9 @@ import os
 import shutil
 
 # Define paths
-dir1 = "/home/karlsimon/point-transformer/data/SimNet/gazebo_pc_record_full_12_42_1024"
-dir2 = "/home/karlsimon/point-transformer/data/SimNet15/gazebo_pc_record_full_15_41_1024"
-merged_dir = "/home/karlsimon/point-transformer/data/SimNet15/gazebo_pc_record_full_12_15_merged_1024"
+dir1 = "/home/karlsimon/point-transformer/data/SimNet_close/gazebo_pc_record_os0_rev06-32_r8_seed42_r_C_normal_mu6_std5_filt1.2_thetaBC-ov3_thetaBF-ov5_rf4-7_labeled_1024"
+dir2 = "/home/karlsimon/point-transformer/data/SimNet_far/gazebo_pc_record_os0_rev06-32_r12_seed42_r_C_normal_mu9_std5_labeled_1024"
+merged_dir = "/home/karlsimon/point-transformer/data/SimNet_merged/gazebo_pc_record_full_512_samples_merged_1024"
 
 # Create merged directories if they don't exist
 os.makedirs(os.path.join(merged_dir, "clouds"), exist_ok=True)

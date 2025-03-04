@@ -20,7 +20,7 @@ torch.manual_seed(42)
 def train():
 
     # To check CUDA and PyTorch installation: $ conda list | grep 'pytorch\|cudatoolkit'
-    device_id = 0  # Change this to 1 to use the second GPU
+    device_id = 1  # Change this to 1 to use the second GPU
     torch.cuda.set_device(device_id)
 
     if torch.cuda.is_available():
@@ -40,7 +40,7 @@ def train():
             'optimizer': 'RangerVA',
             'lr': 0.001,
             'decay_rate': 1e-06,
-            'epochs': 60,
+            'epochs': 120,
             'dropout': 0.4,
             'M': 4,
             'K': 64,
@@ -82,7 +82,7 @@ def train():
     # dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'])
 
     # UNCOMMENT FOR SimNet
-    data_path = 'data/SimNet'
+    data_path = 'data/SimNet_merged'
     dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio
@@ -169,7 +169,7 @@ def train():
     best_loss = float("inf")
             
     ## Learning Rate Scheduler
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.5)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
     
     for epoch in range(config['epochs']):
         log_string(f"Epoch {epoch}/{config['epochs']}")
