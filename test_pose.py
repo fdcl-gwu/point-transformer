@@ -45,7 +45,7 @@ def test():
             'M': 4,
             'K': 64,
             'd_m': 512,
-            'alpha': 10,
+            'alpha': 1,
             'beta': 1,
             'radius_max_points': 32,
             'radius': 0.2,
@@ -75,7 +75,7 @@ def test():
         logger.info(f"Ground Truth Translation: {gt_translation}")
         logger.info(f"Pose Estimation Loss: {loss:.6f}\n")
  
-    data_path = 'data/SimNet_merged'
+    data_path = 'data/SimNet_close'
     dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio
@@ -95,27 +95,31 @@ def test():
     model = pt_pose.Point_Transformer(config).cuda()
 
     from helper.summary import summary
+    #summary(model, input_data=[(1, 128, 1024),(6, 1024)])
     dummy_input = torch.randn(2, 3, 1024).cuda()
-    dummy_centroid = torch.zeros(1, 3).cuda()  # Centroid (batch, 3)
-    dummy_scale = torch.ones(1, 1).cuda()  # Scale factor (batch, 1)
+    dummy_centroid = torch.zeros(2, 3).cuda()  # Centroid (batch, 3)
+    if config['unit_sphere']:
+        dummy_scale = torch.ones(2, 1).cuda()  # Scale factor (batch, 1)
+    else:
+        dummy_scale = torch.tensor([[2.0], [3.0]]).cuda()  # Scale factor (batch, 1)
 
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-03-03_14-23/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-03-06_17-33_incorrect_scale/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights
     model.eval()
     print(f"Loaded best model from {checkpoint_path}, trained until epoch {checkpoint['epoch']}")
 
-    pose_criterion = pt_pose.PoseLoss(config['alpha'], config['beta']).cuda() #Loss just used for logging
+    pose_criterion = pt_pose.KPLoss(config['alpha'], config['beta']).cuda() #Loss just used for logging
 
     result_data = []
 
     with torch.no_grad():
         for batch_idx, data in enumerate(test_dl):
-            points, gt_pose, centroid, scale = data
+            points, gt_pose, keypoints, centroid, scale = data
 
             points = points.cuda()
             points = points.transpose(1, 2)  # points should have [B, C, N] format
@@ -124,21 +128,40 @@ def test():
             scale = scale.cuda()
 
             model.eval()
-            pred_r, pred_t = model(points, centroid, scale)
+            pred_kp, pred_sec = model(points, centroid, scale)
 
             gt_rotation = gt_pose[:, :4] #still in WXYZ (as dataset stores it)
             gt_translation = gt_pose[:, 4:]
 
-            loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation).item()  # Computed for the batch
+            # Process keypoints
+            keypoints = keypoints.cuda()
+            gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, 40, 3]
+            gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]
 
-            # Convert angle-axis to quaternion for logging
-            pred_r_np = pred_r.cpu().numpy()
-            pred_quat = np.array([R.from_rotvec(r).as_quat() for r in pred_r_np])  # NOTE: scipy pred_quat has XYZW format!
-            pred_translation = pred_t.cpu().numpy()
-            gt_quat_xyzw = np.roll(gt_rotation.cpu().numpy(), shift=-1, axis=1)  # Convert WXYZ → XYZW for writing to results.json
-            print("gt_quat_xyzw", gt_quat_xyzw)
-            gt_quat = gt_quat_xyzw #just for now
-            gt_translation = gt_translation.cpu().numpy()
+            loss = pose_criterion(pred_kp, gt_kp, pred_sec, gt_sec)
+
+            # # Convert angle-axis to quaternion for logging
+            # pred_r_np = pred_r.cpu().numpy()
+            # pred_quat = np.array([R.from_rotvec(r).as_quat() for r in pred_r_np])  # NOTE: scipy pred_quat has XYZW format!
+            # pred_translation = pred_t.cpu().numpy()
+            # gt_quat_xyzw = np.roll(gt_rotation.cpu().numpy(), shift=-1, axis=1)  # Convert WXYZ → XYZW for writing to results.json
+            # print("gt_quat_xyzw", gt_quat_xyzw)
+            # gt_quat = gt_quat_xyzw #just for now
+            # gt_translation = gt_translation.cpu().numpy()
+
+            pred_kp_np = pred_kp.cpu().numpy()
+            pred_sec_np = pred_sec.cpu().numpy()
+            gt_kp_np = gt_kp.cpu().numpy()
+            gt_sec_np = gt_sec.cpu().numpy()
+            # write to results.json
+            for i in range(len(gt_rotation)):
+                result_data.append({
+                    "gt_kp": gt_kp_np[i].tolist(),
+                    "gt_sec": gt_sec_np[i].tolist(),
+                    "pred_kp": pred_kp_np[i].tolist(),
+                    "pred_sec": pred_sec_np[i].tolist(),
+                    "loss": loss
+                })
 
             # Retrieve file names for this batch
             batch_start_idx = batch_idx * config['batch_size']
@@ -148,10 +171,11 @@ def test():
             for i in range(len(gt_rotation)):
                 result_data.append({
                     "file": batch_file_names[i],
-                    "gt_rotation": gt_quat[i].tolist(),
-                    "gt_translation": gt_translation[i].tolist(),
-                    "pred_rotation": pred_quat[i].tolist(),
-                    "pred_translation": pred_translation[i].tolist(),
+                    # "gt_rotation": gt_quat[i].tolist(),
+                    # "gt_translation": gt_translation[i].tolist(),
+                    # "pred_rotation": pred_quat[i].tolist(),
+                    # "pred_translation": pred_translation[i].tolist(),
+
                     "loss": loss
                 })
 

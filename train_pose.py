@@ -20,7 +20,7 @@ torch.manual_seed(42)
 def train():
 
     # To check CUDA and PyTorch installation: $ conda list | grep 'pytorch\|cudatoolkit'
-    device_id = 1  # Change this to 1 to use the second GPU
+    device_id = 0  # Change this to 1 to use the second GPU
     torch.cuda.set_device(device_id)
 
     if torch.cuda.is_available():
@@ -40,12 +40,12 @@ def train():
             'optimizer': 'RangerVA',
             'lr': 0.001,
             'decay_rate': 1e-06,
-            'epochs': 120,
+            'epochs': 70,
             'dropout': 0.4,
             'M': 4,
             'K': 64,
             'd_m': 512,
-            'alpha': 10,
+            'alpha': 1,
             'beta': 1,
             'radius_max_points': 32,
             'radius': 0.2,
@@ -82,7 +82,7 @@ def train():
     # dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'])
 
     # UNCOMMENT FOR SimNet
-    data_path = 'data/SimNet_merged'
+    data_path = 'data/SimNet_close'
     dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio
@@ -147,8 +147,9 @@ def train():
     # exit()
 
     # alpha for translation loss, beta for rotation loss
-    pose_criterion = pt_pose.PoseLoss(config['alpha'], config['beta']).cuda()  # Loss just used for logging
-    
+    # pose_criterion = pt_pose.PoseLoss(config['alpha'], config['beta']).cuda()  # Loss just used for logging
+    pose_criterion = pt_pose.KPLoss(config['alpha'], config['beta']).cuda()
+
     ## Create optimizer
     optimizer = None
     if config['optimizer'] == 'RangerVA':
@@ -179,7 +180,7 @@ def train():
 
         ## Train
         for batch_idx, data in enumerate(tqdm(train_dl, total=len(train_dl), smoothing=0.9)):
-            points, gt_pose , centroid, scale = data
+            points, gt_pose , keypoints, centroid, scale = data
             points = points.cuda()
             points = points.transpose(1, 2) # points should have [B, C, N] format
             gt_pose = gt_pose.cuda() # gt_pose format: [qw, qx, qy, qz, tx, ty, tz]
@@ -188,11 +189,16 @@ def train():
             gt_rotation = gt_pose[:, :4]  # Ground-truth quaternion (B,4)
             gt_translation = gt_pose[:, 4:]  # Ground-truth translation (B,3)
 
+            # Process keypoints
+            keypoints = keypoints.cuda()
+            gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, 40, 3]
+            gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]
+
             optimizer.zero_grad()
             model.train()
 
-            pred_r, pred_t = model(points, centroid, scale)
-            loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation)
+            pred_kp, pred_sec = model(points, centroid, scale)
+            loss = pose_criterion(pred_kp, gt_kp, pred_sec, gt_sec)
             if torch.isnan(loss):
                 print(f"Epoch {epoch}, Batch {batch_idx}: NaN loss detected!")
                 print(f"pred_r: {pred_r}")
@@ -219,7 +225,7 @@ def train():
         with torch.no_grad():
             total_val_loss = 0.0
             for data in test_dl:
-                points, gt_pose, centroid, scale = data
+                points, gt_pose, keypoints, centroid, scale = data
 
                 points = points.cuda()
                 points = points.transpose(1, 2) # points should have [B, C, N] format
@@ -228,12 +234,18 @@ def train():
                 scale = scale.cuda()
 
                 model.eval()
-                pred_r, pred_t = model(points, centroid, scale)
+                pred_kp, pred_sec = model(points, centroid, scale)
 
                 gt_rotation = gt_pose[:, :4]
                 gt_translation = gt_pose[:, 4:]
 
-                loss = pose_criterion(pred_r, gt_rotation, pred_t, gt_translation)
+                # Process keypoints
+                keypoints = keypoints.cuda()
+                gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, 40, 3]
+                gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]
+
+            
+                loss = pose_criterion(pred_kp, gt_kp, pred_sec, gt_sec)
                 total_val_loss += loss.item()
 
             avg_val_loss = total_val_loss / len(test_dl)

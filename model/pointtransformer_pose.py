@@ -168,6 +168,39 @@ class PoseLoss(nn.Module):
 
         return loss_r.mean()
 
+class KPLoss(nn.Module):
+    def __init__(self, alpha=1.0, beta=1.0):
+        super().__init__()
+        self.alpha = alpha  # Class (cross entropy) scaling
+        self.beta = beta    # Smooth L1 scaling for regression
+
+    def forward(self, pred_keypoints, gt_keypoints, pred_section_logits, gt_section_label):
+        """
+        Parameters:
+          pred_keypoints: Tensor [B, num_keypoints, 3]
+          gt_keypoints: Tensor [B, num_keypoints, 3]
+          pred_section_logits: Tensor [B, num_keypoints, num_sections]
+          gt_section_label: Tensor [B, num_keypoints] (class indices)
+
+        Returns:
+          total_loss: scalar (combination of classification & regression)
+        """
+        
+        # Regression Loss for keypoint coordinates (Huber / Smooth L1)
+        keypoint_loss = F.smooth_l1_loss(pred_keypoints, gt_keypoints)
+
+        # Classification loss for keypoint labels (Cross-Entropy)
+        section_loss = F.cross_entropy(
+            pred_section_logits.view(-1, pred_section_logits.size(-1)), 
+            gt_section_label.view(-1)
+        )
+
+        # Loss in in normalized space
+
+        # Final combined loss
+        total_loss = self.alpha * section_loss + self.beta * keypoint_loss
+
+        return total_loss
  
 class Point_Transformer(nn.Module):
     def __init__(self, config):
@@ -238,29 +271,27 @@ class Point_Transformer(nn.Module):
         # Create the pose estimation heads
         dim_flatten = out_dim * self.num_sort_nets * self.top_k  # The global feature vector
 
-        ## Pose Estimation Heads
-        # Rotation Head (Outputs 3D axis-angle representation)
-        self.rotation_mlp = nn.Sequential(
-            nn.Linear(dim_flatten, 512),
+        # Keypoint Prediction MLP (Outputs XYZ per keypoint)
+        ## 06.03: HARDCODED FOR NOW
+        self.num_keypoints = 40
+        self.num_sections = 2
+
+        self.keypoint_mlp = nn.Sequential(
+            nn.Linear(dim_flatten, 256),
             nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 3)  # Output: (3,) axis-angle
+            nn.Linear(256, self.num_keypoints * 3)  # [B, num_keypoints * 3]
         )
 
-        # Translation Head (Outputs 3D residual translation)
-        self.translation_mlp = nn.Sequential(
-            nn.Linear(dim_flatten, 512),
+        # Section Classification MLP (Outputs logits per keypoint for classification)
+        self.section_mlp = nn.Sequential(
+            nn.Linear(dim_flatten, 256),
             nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 3)  # Output: (3,) translation residual
+            nn.Linear(256, self.num_keypoints * self.num_sections)  # [B, num_keypoints * num_sections]
         )
-
-        # Apply Weights Initialization
-        self.rotation_mlp.apply(init_weights)
-        self.translation_mlp.apply(init_weights)
-
+        
+        # Initialize weights
+        self.keypoint_mlp.apply(init_weights)
+        self.section_mlp.apply(init_weights)
 
     def forward(self, input, centroid, scale):
 
@@ -354,25 +385,26 @@ class Point_Transformer(nn.Module):
         embedding = embedding.permute(1, 2, 0)
 
         #############################################
-        ## Pose Estimation
+        ## Keypoint Prediction
         #############################################
 
         # Flatten the feature vector for MLP heads
         global_features = torch.flatten(embedding, start_dim=1)  # [B, dim_flatten]
 
-        # Predict rotation (axis-angle representation)
-        predicted_rotation = self.rotation_mlp(global_features)
+        # Predict keypoints
+        pred_keypoints = self.keypoint_mlp(global_features)  # [B, num_keypoints * 3]
+        pred_keypoints = pred_keypoints.view(-1, self.num_keypoints, 3)  # Reshape to [B, num_keypoints, 3]
+        # scale keypoints back to original scale
+        # print("Predicted keypoints shape:", pred_keypoints.shape)  # Expect [B, 40, 3]
+        # print("Scale shape after view:", scale.view(B, 1, 1).shape)  # Expect [B, 1, 1]
+        # print("Centroid shape after view:", centroid.view(B, 1, 3).shape)  # Expect [B, 1, 3]
+        pred_keypoints = pred_keypoints * scale.view(B, 1, 1) + centroid.view(B, 1, 3)
 
-        # Predict translation residual (normalized space)
-        predicted_translation_residual = self.translation_mlp(global_features)
-        # print(f"predicted_translation_residual.shape: {predicted_translation_residual.shape}")  # Should be (B, 3)
-        # print(f"scale.shape: {scale.shape}")  # Should be (B, 1)
-        # print(f"centroid.shape: {centroid.shape}")  # Should be (B, 3)
+        # Predict keypoint region labels (class scores)
+        pred_section_logits = self.section_mlp(global_features)  # [B, num_keypoints * num_sections]
+        pred_section_logits = pred_section_logits.view(-1, self.num_keypoints, self.num_sections)
 
-        scale = scale.unsqueeze(1)  # Expands shape from (B,) to (B,1)
-        predicted_translation = predicted_translation_residual * scale + centroid
-
-        return predicted_rotation, predicted_translation
+        return pred_keypoints, pred_section_logits
 
 
 class SortNet(nn.Module):

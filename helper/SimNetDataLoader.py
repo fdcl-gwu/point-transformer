@@ -42,7 +42,7 @@ class SimNetDataLoader(Dataset):
         self.uniform = uniform
         self.label_channel = label_channel
         self.cache_size = cache_size  # how many data points to cache in memory
-        self.cache = {}  # from index to (points, poses) tuple
+        self.cache = {}  # from index to (points, poses, keypoints) tuple
         self.unit_sphere = unit_sphere
 
         self.data_paths = []
@@ -51,15 +51,17 @@ class SimNetDataLoader(Dataset):
         for scan_dir in scan_dirs:
             points_dir = os.path.join(scan_dir, "clouds")
             poses_dir = os.path.join(scan_dir, "poses")
+            keypoints_dir = os.path.join(scan_dir, "keypoints")
 
             point_files = sorted([f for f in os.listdir(points_dir)])
             pose_files = sorted([f for f in os.listdir(poses_dir)])
+            keypoint_files = sorted([f for f in os.listdir(keypoints_dir)])
 
         # Checks if pose files exist for all point files
         for point_file in point_files:
             pose_file = point_file #since the pose file has the same name as the point file
             if pose_file in pose_files:
-                self.data_paths.append((os.path.join(points_dir, point_file), os.path.join(poses_dir, pose_file)))
+                self.data_paths.append((os.path.join(points_dir, point_file), os.path.join(poses_dir, pose_file), os.path.join(keypoints_dir, pose_file))) #ASSUMPTION: pose_file should be the same name as keypoint filename, and point_file
             else:
                 print(f"Warning: No pose file found for {point_file}")
 
@@ -71,12 +73,12 @@ class SimNetDataLoader(Dataset):
     
 
     def _get_item(self, index):
-        cloud_path, pose_path = self.data_paths[index]
+        cloud_path, pose_path, keypoint_path = self.data_paths[index]
 
-        cache_key = f"{cloud_path}_{pose_path}" # In the case that filenames are shared between directories
+        cache_key = f"{cloud_path}_{pose_path}_{keypoint_path}" # In the case that filenames are shared between directories
 
         if cache_key in self.cache:
-            points, poses = self.cache[cache_key]
+            points, poses, keypoints = self.cache[cache_key]
         else:
             # Load the point cloud from the .txt file
             point_cloud = np.loadtxt(cloud_path).astype(np.float32) 
@@ -87,7 +89,9 @@ class SimNetDataLoader(Dataset):
 
             # Load the pose data
             pose = load_pose_file(pose_path) # [qx, qy, qz, qw, tx, ty, tz]
-
+            keypoint = np.loadtxt(keypoint_path).astype(np.float32)  # Load keypoints
+            keypoint[:, :3] = (keypoint[:, :3] - centroid) / scale  # Normalize keypoints with the same centroid and scale as the point cloud
+            
             # If label_channel=False, only return xyz coordinates. Otherwise, uses xyzl with l between 0-9
             if not self.label_channel:
                 point_cloud = point_cloud[:, 0:3]
@@ -95,9 +99,9 @@ class SimNetDataLoader(Dataset):
 
             # Store in cache if limit is not exceeded
             if len(self.cache) < self.cache_size:
-                self.cache[cache_key] = (point_cloud, pose, centroid, scale)
+                self.cache[cache_key] = (point_cloud, pose, keypoint, centroid, scale)
 
-        return point_cloud, pose, centroid, scale  # Return all values
+        return point_cloud, pose, keypoint, centroid, scale  # Return all values
         
 
     def __getitem__(self, index):
@@ -110,6 +114,7 @@ if __name__ == '__main__':
     data = SimNetDataLoader('/data/ScanNet/', uniform=False, label_channel=False)
     DataLoader = torch.utils.data.DataLoader(data, batch_size=12, shuffle=True)
     
-    for points, poses in DataLoader:
+    for points, poses, keypoints in DataLoader:
         print(points.shape)  # Expected: [batch_size, 1024, 3]
         print(poses.shape)   # Expected: [batch_size, 7]
+        print(keypoints.shape) # Expected: [batch_size, 5]
