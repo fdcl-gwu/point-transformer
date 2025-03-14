@@ -40,13 +40,13 @@ def test():
             'optimizer': 'RangerVA',
             'lr': 0.001,
             'decay_rate': 1e-06,
-            'epochs': 60,
+            'epochs': 70,
             'dropout': 0.4,
             'M': 4,
             'K': 64,
             'd_m': 512,
-            'alpha': 1,
-            'beta': 1,
+            'alpha': 2,
+            'beta': 5,
             'radius_max_points': 32,
             'radius': 0.2,
             'unit_sphere': True
@@ -106,7 +106,7 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-03-06_17-33_incorrect_scale/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-03-14_15-23/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights
@@ -135,7 +135,7 @@ def test():
 
             # Process keypoints
             keypoints = keypoints.cuda()
-            gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, 40, 3]
+            gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, 40, 3
             gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]
 
             loss = pose_criterion(pred_kp, gt_kp, pred_sec, gt_sec)
@@ -150,7 +150,7 @@ def test():
             # gt_translation = gt_translation.cpu().numpy()
 
             pred_kp_np = pred_kp.cpu().numpy()
-            pred_sec_np = pred_sec.cpu().numpy()
+            pred_sec_np = torch.argmax(pred_sec, dim=-1).cpu().numpy()
             gt_kp_np = gt_kp.cpu().numpy()
             gt_sec_np = gt_sec.cpu().numpy()
             # write to results.json
@@ -160,24 +160,13 @@ def test():
                     "gt_sec": gt_sec_np[i].tolist(),
                     "pred_kp": pred_kp_np[i].tolist(),
                     "pred_sec": pred_sec_np[i].tolist(),
-                    "loss": loss
+                    "loss": loss.item()
+
                 })
 
             # Retrieve file names for this batch
             batch_start_idx = batch_idx * config['batch_size']
             batch_file_names = [dataset.data_paths[test_ds.indices[i]][0] for i in range(batch_start_idx, batch_start_idx + len(gt_rotation))]
-
-            # Store inference results in a structured format
-            for i in range(len(gt_rotation)):
-                result_data.append({
-                    "file": batch_file_names[i],
-                    # "gt_rotation": gt_quat[i].tolist(),
-                    # "gt_translation": gt_translation[i].tolist(),
-                    # "pred_rotation": pred_quat[i].tolist(),
-                    # "pred_translation": pred_translation[i].tolist(),
-
-                    "loss": loss
-                })
 
             print(f"Processed batch {batch_idx + 1}/{len(test_dl)}")
 

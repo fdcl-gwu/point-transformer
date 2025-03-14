@@ -60,7 +60,8 @@ class SimNetDataLoader(Dataset):
         # Checks if pose files exist for all point files
         for point_file in point_files:
             pose_file = point_file #since the pose file has the same name as the point file
-            if pose_file in pose_files:
+            keypoint_file = point_file
+            if pose_file in pose_files and keypoint_file in keypoint_files:
                 self.data_paths.append((os.path.join(points_dir, point_file), os.path.join(poses_dir, pose_file), os.path.join(keypoints_dir, pose_file))) #ASSUMPTION: pose_file should be the same name as keypoint filename, and point_file
             else:
                 print(f"Warning: No pose file found for {point_file}")
@@ -78,7 +79,7 @@ class SimNetDataLoader(Dataset):
         cache_key = f"{cloud_path}_{pose_path}_{keypoint_path}" # In the case that filenames are shared between directories
 
         if cache_key in self.cache:
-            points, poses, keypoints = self.cache[cache_key]
+            point_cloud, pose, keypoint, centroid, scale = self.cache[cache_key]
         else:
             # Load the point cloud from the .txt file
             point_cloud = np.loadtxt(cloud_path).astype(np.float32) 
@@ -90,7 +91,7 @@ class SimNetDataLoader(Dataset):
             # Load the pose data
             pose = load_pose_file(pose_path) # [qx, qy, qz, qw, tx, ty, tz]
             keypoint = np.loadtxt(keypoint_path).astype(np.float32)  # Load keypoints
-            keypoint[:, :3] = (keypoint[:, :3] - centroid) / scale  # Normalize keypoints with the same centroid and scale as the point cloud
+            # keypoint[:, :3] = (keypoint[:, :3] - centroid) / scale  # Normalize keypoints with the same centroid and scale as the point cloud
             
             # If label_channel=False, only return xyz coordinates. Otherwise, uses xyzl with l between 0-9
             if not self.label_channel:
@@ -114,7 +115,9 @@ if __name__ == '__main__':
     data = SimNetDataLoader('/data/ScanNet/', uniform=False, label_channel=False)
     DataLoader = torch.utils.data.DataLoader(data, batch_size=12, shuffle=True)
     
-    for points, poses, keypoints in DataLoader:
-        print(points.shape)  # Expected: [batch_size, 1024, 3]
-        print(poses.shape)   # Expected: [batch_size, 7]
-        print(keypoints.shape) # Expected: [batch_size, 5]
+    for points, poses, keypoints, centroids, scales in DataLoader:
+        print(points.shape)   # Expected: [batch_size, 1024, 3]
+        print(poses.shape)    # Expected: [batch_size, 7]
+        print(keypoints.shape)  # Expected: [batch_size, num_keypoints, 3]
+        print(centroids.shape)  # Expected: [batch_size, 3]
+        print(scales.shape)     # Expected: [batch_size]

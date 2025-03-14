@@ -168,6 +168,7 @@ class PoseLoss(nn.Module):
 
         return loss_r.mean()
 
+
 class KPLoss(nn.Module):
     def __init__(self, alpha=1.0, beta=1.0):
         super().__init__()
@@ -184,6 +185,9 @@ class KPLoss(nn.Module):
 
         Returns:
           total_loss: scalar (combination of classification & regression)
+        
+        Note:
+          pred_kp and gt_kp are in the full scale, not normalized.
         """
         
         # Regression Loss for keypoint coordinates (Huber / Smooth L1)
@@ -195,11 +199,9 @@ class KPLoss(nn.Module):
             gt_section_label.view(-1)
         )
 
-        # Loss in in normalized space
-
         # Final combined loss
         total_loss = self.alpha * section_loss + self.beta * keypoint_loss
-
+        
         return total_loss
  
 class Point_Transformer(nn.Module):
@@ -277,14 +279,18 @@ class Point_Transformer(nn.Module):
         self.num_sections = 2
 
         self.keypoint_mlp = nn.Sequential(
-            nn.Linear(dim_flatten, 256),
+            nn.Linear(dim_flatten, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
             nn.ReLU(),
             nn.Linear(256, self.num_keypoints * 3)  # [B, num_keypoints * 3]
         )
 
         # Section Classification MLP (Outputs logits per keypoint for classification)
         self.section_mlp = nn.Sequential(
-            nn.Linear(dim_flatten, 256),
+            nn.Linear(dim_flatten, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
             nn.ReLU(),
             nn.Linear(256, self.num_keypoints * self.num_sections)  # [B, num_keypoints * num_sections]
         )
@@ -399,7 +405,7 @@ class Point_Transformer(nn.Module):
         # print("Scale shape after view:", scale.view(B, 1, 1).shape)  # Expect [B, 1, 1]
         # print("Centroid shape after view:", centroid.view(B, 1, 3).shape)  # Expect [B, 1, 3]
         pred_keypoints = pred_keypoints * scale.view(B, 1, 1) + centroid.view(B, 1, 3)
-
+ 
         # Predict keypoint region labels (class scores)
         pred_section_logits = self.section_mlp(global_features)  # [B, num_keypoints * num_sections]
         pred_section_logits = pred_section_logits.view(-1, self.num_keypoints, self.num_sections)

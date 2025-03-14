@@ -45,8 +45,8 @@ def train():
             'M': 4,
             'K': 64,
             'd_m': 512,
-            'alpha': 1,
-            'beta': 1,
+            'alpha': 2,
+            'beta': 5,
             'radius_max_points': 32,
             'radius': 0.2,
             'unit_sphere': True
@@ -181,6 +181,8 @@ def train():
         ## Train
         for batch_idx, data in enumerate(tqdm(train_dl, total=len(train_dl), smoothing=0.9)):
             points, gt_pose , keypoints, centroid, scale = data
+            # points = points.data.numpy()
+            # points = provider.random_point_dropout(points)
             points = points.cuda()
             points = points.transpose(1, 2) # points should have [B, C, N] format
             gt_pose = gt_pose.cuda() # gt_pose format: [qw, qx, qy, qz, tx, ty, tz]
@@ -189,8 +191,8 @@ def train():
             gt_rotation = gt_pose[:, :4]  # Ground-truth quaternion (B,4)
             gt_translation = gt_pose[:, 4:]  # Ground-truth translation (B,3)
 
-            # Process keypoints
-            keypoints = keypoints.cuda()
+            # Process keypoints (keypoints normalized, gt_kp not normalized)
+            keypoints = keypoints.cuda() # Shape: [11, 40, 5]
             gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, 40, 3]
             gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]
 
@@ -201,8 +203,8 @@ def train():
             loss = pose_criterion(pred_kp, gt_kp, pred_sec, gt_sec)
             if torch.isnan(loss):
                 print(f"Epoch {epoch}, Batch {batch_idx}: NaN loss detected!")
-                print(f"pred_r: {pred_r}")
-                print(f"pred_t: {pred_t}")
+                # print(f"pred_r: {pred_r}")
+                # print(f"pred_t: {pred_t}")
                 print(f"gt_rotation: {gt_rotation}")
                 print(f"gt_translation: {gt_translation}")
                 break
