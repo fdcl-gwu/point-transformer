@@ -191,7 +191,7 @@ def train():
             gt_rotation = gt_pose[:, :4]  # Ground-truth quaternion (B,4)
             gt_translation = gt_pose[:, 4:]  # Ground-truth translation (B,3)
 
-            # Process keypoints (keypoints normalized, gt_kp not normalized)
+            # Process keypoints (keypoints normalized)
             keypoints = keypoints.cuda() # Shape: [11, 40, 5]
             gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, 40, 3]
             gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]

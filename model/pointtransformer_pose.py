@@ -168,12 +168,15 @@ class PoseLoss(nn.Module):
 
         return loss_r.mean()
 
+    
 
 class KPLoss(nn.Module):
     def __init__(self, alpha=1.0, beta=1.0):
         super().__init__()
-        self.alpha = alpha  # Class (cross entropy) scaling
-        self.beta = beta    # Smooth L1 scaling for regression
+        self.alpha = 1  # Class (cross entropy) scaling
+        self.beta = 4    # Smooth L1 scaling for regression
+        self.delta = 5 # rotation loss scaling
+        self.epsilon = 6 # center loss scaling
 
     def forward(self, pred_keypoints, gt_keypoints, pred_section_logits, gt_section_label):
         """
@@ -184,24 +187,61 @@ class KPLoss(nn.Module):
           gt_section_label: Tensor [B, num_keypoints] (class indices)
 
         Returns:
-          total_loss: scalar (combination of classification & regression)
-        
-        Note:
-          pred_kp and gt_kp are in the full scale, not normalized.
+          total_loss: scalar (combination of classification, keypoint regression, and structure constraints)
         """
-        
-        # Regression Loss for keypoint coordinates (Huber / Smooth L1)
+
+        # 1. Keypoint Regression Loss (Smooth L1)
         keypoint_loss = F.smooth_l1_loss(pred_keypoints, gt_keypoints)
 
-        # Classification loss for keypoint labels (Cross-Entropy)
+        # 2. Classification Loss for Keypoint Labels (Cross-Entropy)
         section_loss = F.cross_entropy(
             pred_section_logits.view(-1, pred_section_logits.size(-1)), 
             gt_section_label.view(-1)
         )
 
-        # Final combined loss
-        total_loss = self.alpha * section_loss + self.beta * keypoint_loss
+        # 3. Rotation Alignment Loss (Procrustes Analysis for Rotation Consistency)
+        def rotation_loss(pred_keypoints, gt_keypoints):
+            """Apply rotation loss per section."""
+            loss = 0
+            num_sections = pred_keypoints.shape[1] // 20
+            for i in range(num_sections):
+                pred = pred_keypoints[:, i * 20 : (i + 1) * 20, :3]
+                gt = gt_keypoints[:, i * 20 : (i + 1) * 20, :3]
+                pred_centered = pred - pred.mean(dim=1, keepdim=True)
+                gt_centered = gt - gt.mean(dim=1, keepdim=True)
+                U, _, V = torch.svd(torch.bmm(gt_centered.transpose(1, 2), pred_centered))
+                R = torch.bmm(U, V.transpose(1, 2))
+                pred_aligned = torch.bmm(pred_centered, R)
+                loss += F.smooth_l1_loss(pred_aligned, gt_centered)
+            return loss / num_sections
+
+        rot_loss_val = rotation_loss(pred_keypoints, gt_keypoints)
+
+        # 4. Center Alignment Loss (Ensures predicted centroids match ground truth)
+        def center_loss(pred_keypoints, gt_keypoints):
+            """Ensure predicted section centers align with GT centers."""
+            loss = 0
+            num_sections = pred_keypoints.shape[1] // 20
+            for i in range(num_sections):
+                pred_center = torch.mean(pred_keypoints[:, i * 20 : (i + 1) * 20, :3], dim=1)
+                gt_center = torch.mean(gt_keypoints[:, i * 20 : (i + 1) * 20, :3], dim=1)
+                loss += F.smooth_l1_loss(pred_center, gt_center)
+            return loss / num_sections
         
+        cent_loss_val = center_loss(pred_keypoints, gt_keypoints)
+
+        # Final combined loss
+        total_loss = (
+            self.alpha * section_loss +
+            self.beta * keypoint_loss +
+            self.delta * rot_loss_val +
+            self.epsilon * cent_loss_val
+        )
+
+        print(f"KPLoss: keypoint_loss: {keypoint_loss.item()}, section_loss: {section_loss.item()}, "
+              f"rot_loss: {rot_loss_val.item()}, center_loss: {cent_loss_val.item()}, "
+              f"total_loss: {total_loss.item()}")
+
         return total_loss
  
 class Point_Transformer(nn.Module):
@@ -404,7 +444,7 @@ class Point_Transformer(nn.Module):
         # print("Predicted keypoints shape:", pred_keypoints.shape)  # Expect [B, 40, 3]
         # print("Scale shape after view:", scale.view(B, 1, 1).shape)  # Expect [B, 1, 1]
         # print("Centroid shape after view:", centroid.view(B, 1, 3).shape)  # Expect [B, 1, 3]
-        pred_keypoints = pred_keypoints * scale.view(B, 1, 1) + centroid.view(B, 1, 3)
+        # pred_keypoints = pred_keypoints * scale.view(B, 1, 1) + centroid.view(B, 1, 3)
  
         # Predict keypoint region labels (class scores)
         pred_section_logits = self.section_mlp(global_features)  # [B, num_keypoints * num_sections]

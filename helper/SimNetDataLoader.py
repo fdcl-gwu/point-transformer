@@ -91,7 +91,7 @@ class SimNetDataLoader(Dataset):
             # Load the pose data
             pose = load_pose_file(pose_path) # [qx, qy, qz, qw, tx, ty, tz]
             keypoint = np.loadtxt(keypoint_path).astype(np.float32)  # Load keypoints
-            # keypoint[:, :3] = (keypoint[:, :3] - centroid) / scale  # Normalize keypoints with the same centroid and scale as the point cloud
+            keypoint[:, :3] = (keypoint[:, :3] - centroid) / scale  # Normalize keypoints with the same centroid and scale as the point cloud
             
             # If label_channel=False, only return xyz coordinates. Otherwise, uses xyzl with l between 0-9
             if not self.label_channel:
