@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 import datetime
 import torch
+import json
 import numpy as np
 from tqdm import tqdm
 import model.pointtransformer_pose as pt_pose
@@ -20,7 +21,7 @@ torch.manual_seed(42)
 def train():
 
     # To check CUDA and PyTorch installation: $ conda list | grep 'pytorch\|cudatoolkit'
-    device_id = 0  # Change this to 1 to use the second GPU
+    device_id = 1  # Change this to 1 to use the second GPU
     torch.cuda.set_device(device_id)
 
     if torch.cuda.is_available():
@@ -47,6 +48,9 @@ def train():
             'd_m': 512,
             'alpha': 2,
             'beta': 5,
+            'gamma': 3,
+            'delta': 1,
+            'epsilon': 1,
             'radius_max_points': 32,
             'radius': 0.2,
             'unit_sphere': True
@@ -110,8 +114,23 @@ def train():
  
     print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
 
+    # Load CAD points, keypoints and normalize ONCE
+    cad_kp = torch.tensor(np.loadtxt("data/cad_keypoints.txt", dtype=np.float32))  # on CPU for now
+    cad_pc = torch.tensor(np.loadtxt("data/rotated_Ship_copy_downsampled_neg05.txt", dtype=np.float32))
+
+    cad_centroid = cad_pc.mean(dim=0)
+    cad_pc = cad_pc - cad_centroid
+    cad_scale = cad_pc.norm(dim=1).max()
+
+    if config['unit_sphere']:
+        cad_pc = cad_pc / cad_scale
+        cad_kp = (cad_kp - cad_centroid) / cad_scale
+
+    cad_kp = cad_kp.cuda()
+    cad_pc = cad_pc.cuda()
+
     ## Create Point Transformer model
-    model = pt_pose.Point_Transformer(config).cuda()
+    model = pt_pose.Point_Transformer(config, cad_kp).cuda()
     # model = pt_pose.SortNet(128/home/karlsimon/point-transformer/log/pose_estimation/2025-02-16_18-53,6, top_k=64).cuda()
     
     def count_parameters(model):
@@ -148,7 +167,7 @@ def train():
 
     # alpha for translation loss, beta for rotation loss
     # pose_criterion = pt_pose.PoseLoss(config['alpha'], config['beta']).cuda()  # Loss just used for logging
-    pose_criterion = pt_pose.KPLoss(config['alpha'], config['beta']).cuda()
+    pose_criterion = pt_pose.DecoderLoss(config['alpha'], config['beta'], config['gamma'], config['delta'], config['epsilon']).cuda()  # Loss just used for logging
 
     ## Create optimizer
     optimizer = None
@@ -194,13 +213,13 @@ def train():
             # Process keypoints (keypoints normalized)
             keypoints = keypoints.cuda() # Shape: [11, 40, 5]
             gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, 40, 3]
-            gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]
+            # gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]
 
             optimizer.zero_grad()
             model.train()
 
-            pred_kp, pred_sec = model(points, centroid, scale)
-            loss = pose_criterion(pred_kp, gt_kp, pred_sec, gt_sec)
+            pred_kp = model(points, centroid, scale)
+            loss = pose_criterion(pred_kp, gt_kp)
             if torch.isnan(loss):
                 print(f"Epoch {epoch}, Batch {batch_idx}: NaN loss detected!")
                 # print(f"pred_r: {pred_r}")
@@ -236,7 +255,7 @@ def train():
                 scale = scale.cuda()
 
                 model.eval()
-                pred_kp, pred_sec = model(points, centroid, scale)
+                pred_kp = model(points, centroid, scale)
 
                 gt_rotation = gt_pose[:, :4]
                 gt_translation = gt_pose[:, 4:]
@@ -244,10 +263,9 @@ def train():
                 # Process keypoints
                 keypoints = keypoints.cuda()
                 gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, 40, 3]
-                gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]
+                # gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]
 
-            
-                loss = pose_criterion(pred_kp, gt_kp, pred_sec, gt_sec)
+                loss = pose_criterion(pred_kp, gt_kp)
                 total_val_loss += loss.item()
 
             avg_val_loss = total_val_loss / len(test_dl)

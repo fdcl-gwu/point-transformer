@@ -166,15 +166,13 @@ class PoseLoss(nn.Module):
         # Compute geodesic loss
         loss_r = torch.acos(trace_val)
 
-        return loss_r.mean()
-
-    
+        return loss_r.mean()    
 
 class KPLoss(nn.Module):
     def __init__(self, alpha=1.0, beta=1.0):
         super().__init__()
         self.alpha = 1  # Class (cross entropy) scaling
-        self.beta = 4    # Smooth L1 scaling for regression
+        self.beta = 3   # Smooth L1 scaling for regression
         self.delta = 5 # rotation loss scaling
         self.epsilon = 6 # center loss scaling
 
@@ -238,14 +236,73 @@ class KPLoss(nn.Module):
             self.epsilon * cent_loss_val
         )
 
-        print(f"KPLoss: keypoint_loss: {keypoint_loss.item()}, section_loss: {section_loss.item()}, "
-              f"rot_loss: {rot_loss_val.item()}, center_loss: {cent_loss_val.item()}, "
-              f"total_loss: {total_loss.item()}")
+        # print(f"KPLoss: keypoint_loss: {keypoint_loss.item()}, section_loss: {section_loss.item()}, "
+        #       f"rot_loss: {rot_loss_val.item()}, center_loss: {cent_loss_val.item()}, "
+        #       f"total_loss: {total_loss.item()}")
 
         return total_loss
  
+
+class DecoderLoss(nn.Module):
+    def __init__(self, alpha=1.0, beta=1.0, gamma=1.0, delta=1.0, epsilon=1.0):
+        super().__init__()
+        self.alpha = alpha # Keypoint regression loss
+        self.beta = beta # Rotation alignment loss
+        self.gamma = gamma # Pairwise distance loss
+        self.delta = delta # Unused
+        self.epsilon = epsilon # Unused
+
+    def forward(self, pred_keypoints, gt_keypoints):
+        """
+        Parameters:
+          pred_keypoints: Tensor [B, num_keypoints, 3]
+          gt_keypoints: Tensor [B, num_keypoints, 3]
+
+        Returns:
+          total_loss: scalar
+        """
+
+        # 1. Keypoint Regression Loss
+        keypoint_loss = F.smooth_l1_loss(pred_keypoints, gt_keypoints)
+
+        # 2. Rotation Alignment Loss (Procrustes)
+        def procrustes_loss(pred, gt):
+            loss = 0
+            num_sections = pred.shape[1] // 20  # assuming 2 sections
+            for i in range(num_sections):
+                pred_kp = pred[:, i * 20 : (i + 1) * 20, :]
+                gt_kp = gt[:, i * 20 : (i + 1) * 20, :]
+
+                pred_centered = pred_kp - pred_kp.mean(dim=1, keepdim=True)
+                gt_centered = gt_kp - gt_kp.mean(dim=1, keepdim=True)
+                U, _, V = torch.svd(torch.bmm(gt_centered.transpose(1, 2), pred_centered))
+                R = torch.bmm(U, V.transpose(1, 2))
+                aligned = torch.bmm(gt_centered, R)
+                loss += F.smooth_l1_loss(aligned, pred_centered)
+            return loss / num_sections
+
+        rot_loss_val = procrustes_loss(pred_keypoints, gt_keypoints)
+
+        # 3. Pairwise Distance Loss
+        def pairwise_dist_loss(pred, gt):
+            B, N, _ = pred.shape
+            pd_pred = torch.cdist(pred, pred, p=2)
+            pd_gt = torch.cdist(gt, gt, p=2)
+            return F.smooth_l1_loss(pd_pred, pd_gt)
+
+        shape_loss_val = pairwise_dist_loss(pred_keypoints, gt_keypoints)
+
+        # Final combined loss
+        total_loss = (
+            self.alpha * keypoint_loss +
+            self.beta * rot_loss_val +
+            self.gamma * shape_loss_val
+        )
+
+        return total_loss
+
 class Point_Transformer(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, cad_kp):
         super(Point_Transformer, self).__init__()
         
         # Parameters
@@ -270,6 +327,7 @@ class Point_Transformer(nn.Module):
         self.sort_cnn.apply(init_weights)
         self.sort_bn = nn.ModuleList([nn.BatchNorm2d(num_features=self.sort_ch[i]) for i in range(len(self.sort_ch))])
         
+        
         ## Create Self-Attention layer
         ##  Local Feature Generation --> A^self
         self.input_selfattention_layer = nn.TransformerEncoderLayer(self.sort_ch[-1], nhead=8)
@@ -288,6 +346,21 @@ class Point_Transformer(nn.Module):
         self.radius_cnn = create_rFF3d(self.radius_ch, self.radius_max_points+1, self.input_dim)
         self.radius_cnn.apply(init_weights)
         self.radius_bn = nn.ModuleList([nn.BatchNorm3d(num_features=self.radius_ch[i]) for i in range(len(self.radius_ch))])
+
+        ## Create rFF to project input points to latent feature space
+        ## Global Feature Generation --> rFF
+        self.global_ch = [64, 128, 256]
+        self.global_cnn = create_rFF(self.global_ch, self.input_dim)
+        self.global_cnn.apply(init_weights)
+        self.global_bn = nn.ModuleList(
+            [
+                nn.BatchNorm2d(num_features=self.global_ch[i])
+                for i in range(len(self.global_ch))
+            ]
+        )
+        self.global_selfattention = nn.TransformerEncoderLayer(
+            self.global_ch[-1], nhead=8
+        )
 
         ## Create set abstraction (MSG)
         ##  Global Feature Generation --> Set Abstraction (MSG)
@@ -310,34 +383,32 @@ class Point_Transformer(nn.Module):
         self.transformer_model = nn.Transformer(d_model=self.d_model,nhead=8, dim_feedforward=512, num_encoder_layers=1, num_decoder_layers=1, custom_decoder=self.custom_decoder)
         self.transformer_model.apply(init_weights)
 
-        # Create the pose estimation heads
-        dim_flatten = out_dim * self.num_sort_nets * self.top_k  # The global feature vector
+        ## Decoder Key Point Prediction
+        self.num_keypoints = 40  # 20 stern + 20 doghouse
 
-        # Keypoint Prediction MLP (Outputs XYZ per keypoint)
-        ## 06.03: HARDCODED FOR NOW
-        self.num_keypoints = 40
-        self.num_sections = 2
-
-        self.keypoint_mlp = nn.Sequential(
-            nn.Linear(dim_flatten, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, self.num_keypoints * 3)  # [B, num_keypoints * 3]
-        )
-
-        # Section Classification MLP (Outputs logits per keypoint for classification)
-        self.section_mlp = nn.Sequential(
-            nn.Linear(dim_flatten, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, self.num_keypoints * self.num_sections)  # [B, num_keypoints * num_sections]
-        )
+        # # UNCOMMENT for learnable decoder queries
+        # self.kp_queries = nn.Parameter(torch.randn(self.num_keypoints, self.d_model))  # [num_kp, feature_dim]
         
-        # Initialize weights
-        self.keypoint_mlp.apply(init_weights)
-        self.section_mlp.apply(init_weights)
+        # UNCOMMENT for CAD keypoints in canonical object frame (size [40, 3])
+        self.register_buffer("cad_keypoints", cad_kp.clone().detach().float())
+
+        # MLP to project CAD coords to decoder query features
+        self.kp_embed = nn.Sequential(
+            nn.Linear(3, 64),
+            nn.ReLU(),
+            nn.Linear(64, self.d_model)
+        )
+
+        self.kp_decoder_layer = nn.TransformerDecoderLayer(self.d_model, nhead=8)
+        self.kp_decoder = nn.TransformerDecoder(self.kp_decoder_layer, num_layers=2)
+
+        self.kp_out_head = nn.Sequential(
+            nn.Linear(self.d_model, 128),
+            nn.ReLU(),
+            nn.Linear(128, 3)
+        )
+        self.kp_out_head.apply(init_weights)
+
 
     def forward(self, input, centroid, scale):
 
@@ -354,21 +425,27 @@ class Point_Transformer(nn.Module):
         else:
             norm = None
 
+        # Compute x_global features (enhanced per-point features)
+        # x_global part taken from pt_partseg code
+        x_global = input.unsqueeze(1)  # [B, 1, 3, N]
+        for i, global_conv in enumerate(self.global_cnn):
+            bn = self.global_bn[i]
+            x_global = self.actv_fn(bn(global_conv(x_global)))
+        x_global = x_global.squeeze(2).permute(2, 0, 1)
+        x_global = self.global_selfattention(x_global)
+        print("x_global shape:", x_global.shape)  # Expected [N, B, C_out]
+        x_global = x_global.permute(1, 2, 0)  # [N, B, C_out] → [B, C_out, N]
+
+        # Now x_global is your feature tensor to input to sa1
         if self.unit_sphere:
-            ## Set Abstraction with MSG
-            l1_xyz, l1_points = self.sa1(xyz, norm)
+            l1_xyz, l1_points = self.sa1(xyz, x_global) #x_global shape should be: [B, D, N]
             l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
             global_feat = torch.cat([l2_xyz, l2_points], dim=1)
+            print("global_feat shape:", global_feat.shape)
         else:
-            ## Compute dynamic radii per batch
-            base_radii = [0.1, 0.2, 0.4]  # Original MSG radii
+            base_radii = [0.1, 0.2, 0.4]
             adjusted_radii = torch.tensor(base_radii, device=scale.device, dtype=scale.dtype) * scale.view(-1, 1)
-            print(f"adjusted_radii: {adjusted_radii}, and scale: {scale}")
-
-            ## Set Abstraction with MSG
-            print(f"xyz: {xyz.shape}")
-            l1_xyz, l1_points = self.sa1(xyz, norm, adjusted_radii)
-            print(f"l1_xyz: {l1_xyz.shape}, l1_points: {l1_points.shape}")
+            l1_xyz, l1_points = self.sa1(xyz, x_global, adjusted_radii)
             l2_xyz, l2_points = self.sa2(l1_xyz, l1_points, adjusted_radii)
             global_feat = torch.cat([l2_xyz, l2_points], dim=1)
 
@@ -431,27 +508,26 @@ class Point_Transformer(nn.Module):
         embedding = embedding.permute(1, 2, 0)
 
         #############################################
-        ## Keypoint Prediction
+        ## Decoder Key Point Prediction
         #############################################
 
-        # Flatten the feature vector for MLP heads
-        global_features = torch.flatten(embedding, start_dim=1)  # [B, dim_flatten]
+        # Memory captures what the model has learned about the scan
+        memory = embedding.permute(2, 0, 1)  # shape: [256, 11, 64]
+        
+        # UNCOMMENT for learnable decoder queries
+        # queries = self.kp_queries.unsqueeze(1).repeat(1, memory.size(1), 1)  # [num_kp, B, C]
+        
+        # UNCOMMENT for CAD keypoints in canonical object frame
+        queries = self.kp_embed(self.cad_keypoints)          # [40, d_model], cad_keypoints stay the same, but their embeddings don't
+        queries = queries.unsqueeze(1).repeat(1, B, 1)       # [40, B, d_model]
 
-        # Predict keypoints
-        pred_keypoints = self.keypoint_mlp(global_features)  # [B, num_keypoints * 3]
-        pred_keypoints = pred_keypoints.view(-1, self.num_keypoints, 3)  # Reshape to [B, num_keypoints, 3]
-        # scale keypoints back to original scale
-        # print("Predicted keypoints shape:", pred_keypoints.shape)  # Expect [B, 40, 3]
-        # print("Scale shape after view:", scale.view(B, 1, 1).shape)  # Expect [B, 1, 1]
-        # print("Centroid shape after view:", centroid.view(B, 1, 3).shape)  # Expect [B, 1, 3]
-        # pred_keypoints = pred_keypoints * scale.view(B, 1, 1) + centroid.view(B, 1, 3)
- 
-        # Predict keypoint region labels (class scores)
-        pred_section_logits = self.section_mlp(global_features)  # [B, num_keypoints * num_sections]
-        pred_section_logits = pred_section_logits.view(-1, self.num_keypoints, self.num_sections)
+        decoder_out = self.kp_decoder(tgt=queries, memory=memory)  # [num_kp, B, C]
+        decoder_out = decoder_out.permute(1, 0, 2)  # [B, num_kp, C]
 
-        return pred_keypoints, pred_section_logits
+        pred_keypoints = self.kp_out_head(decoder_out)  # [B, num_kp, 3]
+        # pred_keypoints = pred_keypoints * scale.view(-1, 1, 1) + centroid.view(-1, 1, 3)
 
+        return pred_keypoints
 
 class SortNet(nn.Module):
     def __init__(self, num_feat, input_dims, actv_fn=F.relu, top_k = 5):
