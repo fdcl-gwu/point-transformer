@@ -365,7 +365,8 @@ class Point_Transformer(nn.Module):
         ## Create set abstraction (MSG)
         ##  Global Feature Generation --> Set Abstraction (MSG)
         out_points = 128
-        in_channel = 3 if self.norm_channel else 0 
+        in_channel = self.global_ch[-1]  # → 256
+        print("in_channel:", in_channel)
 
         if self.unit_sphere:
             self.sa1 = PointNetSetAbstractionMsg(256, [0.1, 0.2, 0.4], [16, 32, 64], in_channel, [[32, 32, 64], [64, 64, 128], [64, 96, 128]])
@@ -376,7 +377,7 @@ class Point_Transformer(nn.Module):
     
         ## Create Local-Global Attention
         ##  A^LG
-        out_dim = 64
+        out_dim = self.d_model
         self.decoder_layer = nn.TransformerDecoderLayer(self.d_model, nhead=8)
         self.last_layer = PTransformerDecoderLayer(self.d_model, nhead=8, last_dim=out_dim)
         self.custom_decoder = PTransformerDecoder(self.decoder_layer, 1, self.last_layer)
@@ -433,7 +434,7 @@ class Point_Transformer(nn.Module):
             x_global = self.actv_fn(bn(global_conv(x_global)))
         x_global = x_global.squeeze(2).permute(2, 0, 1)
         x_global = self.global_selfattention(x_global)
-        print("x_global shape:", x_global.shape)  # Expected [N, B, C_out]
+        # print("x_global shape:", x_global.shape)  # Expected [N, B, C_out]
         x_global = x_global.permute(1, 2, 0)  # [N, B, C_out] → [B, C_out, N]
 
         # Now x_global is your feature tensor to input to sa1
@@ -441,7 +442,7 @@ class Point_Transformer(nn.Module):
             l1_xyz, l1_points = self.sa1(xyz, x_global) #x_global shape should be: [B, D, N]
             l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
             global_feat = torch.cat([l2_xyz, l2_points], dim=1)
-            print("global_feat shape:", global_feat.shape)
+            # print("global_feat shape:", global_feat.shape)
         else:
             base_radii = [0.1, 0.2, 0.4]
             adjusted_radii = torch.tensor(base_radii, device=scale.device, dtype=scale.dtype) * scale.view(-1, 1)
@@ -521,6 +522,7 @@ class Point_Transformer(nn.Module):
         queries = self.kp_embed(self.cad_keypoints)          # [40, d_model], cad_keypoints stay the same, but their embeddings don't
         queries = queries.unsqueeze(1).repeat(1, B, 1)       # [40, B, d_model]
 
+        # print("shape of queries:", queries.shape, "shape of memory:", memory.shape, "and embedding:", embedding.shape)
         decoder_out = self.kp_decoder(tgt=queries, memory=memory)  # [num_kp, B, C]
         decoder_out = decoder_out.permute(1, 0, 2)  # [B, num_kp, C]
 

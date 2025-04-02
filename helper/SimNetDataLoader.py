@@ -51,7 +51,7 @@ class SimNetDataLoader(Dataset):
         for scan_dir in scan_dirs:
             points_dir = os.path.join(scan_dir, "clouds")
             poses_dir = os.path.join(scan_dir, "poses")
-            keypoints_dir = os.path.join(scan_dir, "keypoints")
+            keypoints_dir = os.path.join(scan_dir, "keypoints_st_dg_few")
 
             point_files = sorted([f for f in os.listdir(points_dir)])
             pose_files = sorted([f for f in os.listdir(poses_dir)])

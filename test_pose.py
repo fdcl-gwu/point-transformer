@@ -45,8 +45,11 @@ def test():
             'M': 4,
             'K': 64,
             'd_m': 512,
-            'alpha': 20,
+            'alpha': 2,
             'beta': 5,
+            'gamma': 3,
+            'delta': 1,
+            'epsilon': 1,
             'radius_max_points': 32,
             'radius': 0.2,
             'unit_sphere': True
@@ -91,8 +94,23 @@ def test():
  
     print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
 
+    # Load CAD points, keypoints and normalize ONCE
+    cad_kp = torch.tensor(np.loadtxt("data/cad_keypoints.txt", dtype=np.float32))  # on CPU for now
+    cad_pc = torch.tensor(np.loadtxt("data/rotated_Ship_copy_downsampled_neg05.txt", dtype=np.float32))
+
+    cad_centroid = cad_pc.mean(dim=0)
+    cad_pc = cad_pc - cad_centroid
+    cad_scale = cad_pc.norm(dim=1).max()
+
+    if config['unit_sphere']:
+        cad_pc = cad_pc / cad_scale
+        cad_kp = (cad_kp - cad_centroid) / cad_scale
+
+    cad_kp = cad_kp.cuda()
+    cad_pc = cad_pc.cuda()
+
     ## Create Point Transformer model
-    model = pt_pose.Point_Transformer(config).cuda()
+    model = pt_pose.Point_Transformer(config, cad_kp).cuda()
 
     from helper.summary import summary
     #summary(model, input_data=[(1, 128, 1024),(6, 1024)])
@@ -106,14 +124,14 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-03-23_14-07/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-04-02_17-11/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights
     model.eval()
     print(f"Loaded best model from {checkpoint_path}, trained until epoch {checkpoint['epoch']}")
 
-    pose_criterion = pt_pose.KPLoss(config['alpha'], config['beta']).cuda() #Loss just used for logging
+    pose_criterion = pt_pose.DecoderLoss(config['alpha'], config['beta'], config['gamma'], config['delta'], config['epsilon']).cuda()  # Loss just used for logging
 
     result_data = []
 
@@ -128,7 +146,7 @@ def test():
             scale = scale.cuda()
 
             model.eval()
-            pred_kp, pred_sec = model(points, centroid, scale)
+            pred_kp = model(points, centroid, scale)
 
             gt_rotation = gt_pose[:, :4] #still in WXYZ (as dataset stores it)
             gt_translation = gt_pose[:, 4:]
@@ -136,10 +154,9 @@ def test():
             # Process keypoints
             keypoints = keypoints.cuda()
             gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, 40, 3
-            gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]
+            # gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]
 
-            loss = pose_criterion(pred_kp, gt_kp, pred_sec, gt_sec)
-
+            loss = pose_criterion(pred_kp, gt_kp)
             # # Convert angle-axis to quaternion for logging
             # pred_r_np = pred_r.cpu().numpy()
             # pred_quat = np.array([R.from_rotvec(r).as_quat() for r in pred_r_np])  # NOTE: scipy pred_quat has XYZW format!
@@ -150,18 +167,17 @@ def test():
             # gt_translation = gt_translation.cpu().numpy()
 
             pred_kp_np = pred_kp.cpu().numpy()
-            pred_sec_np = torch.argmax(pred_sec, dim=-1).cpu().numpy()
+            # pred_sec_np = torch.argmax(pred_sec, dim=-1).cpu().numpy()
             gt_kp_np = gt_kp.cpu().numpy()
-            gt_sec_np = gt_sec.cpu().numpy()
+            # gt_sec_np = gt_sec.cpu().numpy()
             # write to results.json
             for i in range(len(gt_rotation)):
                 result_data.append({
                     "gt_kp": gt_kp_np[i].tolist(),
-                    "gt_sec": gt_sec_np[i].tolist(),
+                    # "gt_sec": gt_sec_np[i].tolist(),
                     "pred_kp": pred_kp_np[i].tolist(),
-                    "pred_sec": pred_sec_np[i].tolist(),
+                    # "pred_sec": pred_sec_np[i].tolist(),
                     "loss": loss.item()
-
                 })
 
             # Retrieve file names for this batch
