@@ -315,6 +315,7 @@ class Point_Transformer(nn.Module):
         self.top_k = config['K']
         self.d_model = config['d_m']
         self.unit_sphere = config['unit_sphere']
+        self.num_keypoints = config['num_keypoints']
  
         # TODO: try different radius values
         self.radius_max_points = config['radius_max_points']
@@ -385,12 +386,10 @@ class Point_Transformer(nn.Module):
         self.transformer_model.apply(init_weights)
 
         ## Decoder Key Point Prediction
-        self.num_keypoints = 40  # 20 stern + 20 doghouse
-
         # # UNCOMMENT for learnable decoder queries
         # self.kp_queries = nn.Parameter(torch.randn(self.num_keypoints, self.d_model))  # [num_kp, feature_dim]
         
-        # UNCOMMENT for CAD keypoints in canonical object frame (size [40, 3])
+        # UNCOMMENT for CAD keypoints in canonical object frame (size [self.num_keypoints, 3])
         self.register_buffer("cad_keypoints", cad_kp.clone().detach().float())
 
         # MLP to project CAD coords to decoder query features
@@ -519,8 +518,8 @@ class Point_Transformer(nn.Module):
         # queries = self.kp_queries.unsqueeze(1).repeat(1, memory.size(1), 1)  # [num_kp, B, C]
         
         # UNCOMMENT for CAD keypoints in canonical object frame
-        queries = self.kp_embed(self.cad_keypoints)          # [40, d_model], cad_keypoints stay the same, but their embeddings don't
-        queries = queries.unsqueeze(1).repeat(1, B, 1)       # [40, B, d_model]
+        queries = self.kp_embed(self.cad_keypoints)          # [self.num_keypoints, d_model], cad_keypoints stay the same, but their embeddings don't
+        queries = queries.unsqueeze(1).repeat(1, B, 1)       # [self.num_keypoints, B, d_model]
 
         # print("shape of queries:", queries.shape, "shape of memory:", memory.shape, "and embedding:", embedding.shape)
         decoder_out = self.kp_decoder(tgt=queries, memory=memory)  # [num_kp, B, C]

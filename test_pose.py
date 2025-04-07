@@ -45,14 +45,15 @@ def test():
             'M': 4,
             'K': 64,
             'd_m': 512,
-            'alpha': 2,
-            'beta': 5,
-            'gamma': 3,
+            'alpha': 4,
+            'beta': 6,
+            'gamma': 5,
             'delta': 1,
             'epsilon': 1,
             'radius_max_points': 32,
             'radius': 0.2,
-            'unit_sphere': True
+            'unit_sphere': True,
+            'num_keypoints': 40 # must match the number of keypoints in the dataset loaded from SimNetDataLoader
     }
 
     # Create inference log directory
@@ -79,6 +80,8 @@ def test():
         logger.info(f"Pose Estimation Loss: {loss:.6f}\n")
  
     data_path = 'data/SimNet_close'
+    cad_keypoint_file = 'data/cad_keypoints_40_cfg_st_dg_few.txt'
+    cad_pc_file = "data/rotated_Ship_copy_downsampled_neg05.txt"
     dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio
@@ -95,8 +98,8 @@ def test():
     print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
 
     # Load CAD points, keypoints and normalize ONCE
-    cad_kp = torch.tensor(np.loadtxt("data/cad_keypoints.txt", dtype=np.float32))  # on CPU for now
-    cad_pc = torch.tensor(np.loadtxt("data/rotated_Ship_copy_downsampled_neg05.txt", dtype=np.float32))
+    cad_kp = torch.tensor(np.loadtxt(cad_keypoint_file, dtype=np.float32))
+    cad_pc = torch.tensor(np.loadtxt(cad_pc_file, dtype=np.float32))
 
     cad_centroid = cad_pc.mean(dim=0)
     cad_pc = cad_pc - cad_centroid
@@ -124,7 +127,7 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-04-02_17-11/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-04-03_13-56/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights
@@ -153,8 +156,8 @@ def test():
 
             # Process keypoints
             keypoints = keypoints.cuda()
-            gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, 40, 3
-            # gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]
+            gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, config['num_keypoints'], 3
+            # gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, config['num_keypoints']]
 
             loss = pose_criterion(pred_kp, gt_kp)
             # # Convert angle-axis to quaternion for logging

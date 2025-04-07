@@ -35,13 +35,15 @@ def train():
         print(str)
 
     ## Hyperparameters
+    # NOTE: alpha, beta, gamma, delta, epsilon refer to different losses depending on 
+    # the Loss used (KP, Decoder, etc).Check pointtransformer_pose.py for details.
     config = {'num_points' : 1024,
             'batch_size': 11,
             'use_labels': False,
             'optimizer': 'RangerVA',
             'lr': 0.001,
             'decay_rate': 1e-06,
-            'epochs': 70,
+            'epochs': 100,
             'dropout': 0.4,
             'M': 4,
             'K': 64,
@@ -53,7 +55,8 @@ def train():
             'epsilon': 1,
             'radius_max_points': 32,
             'radius': 0.2,
-            'unit_sphere': True
+            'unit_sphere': True,
+            'num_keypoints': 40 # must match the number of keypoints in the dataset loaded from SimNetDataLoader
     }
 
     ## Create LogDir
@@ -87,6 +90,8 @@ def train():
 
     # UNCOMMENT FOR SimNet
     data_path = 'data/SimNet_close'
+    cad_keypoint_file = 'data/cad_keypoints_40_cfg_st_dg_few.txt'
+    cad_pc_file = "data/rotated_Ship_copy_downsampled_neg05.txt"
     dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio
@@ -115,8 +120,8 @@ def train():
     print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
 
     # Load CAD points, keypoints and normalize ONCE
-    cad_kp = torch.tensor(np.loadtxt("data/cad_keypoints.txt", dtype=np.float32))  # on CPU for now
-    cad_pc = torch.tensor(np.loadtxt("data/rotated_Ship_copy_downsampled_neg05.txt", dtype=np.float32))
+    cad_kp = torch.tensor(np.loadtxt(cad_keypoint_file, dtype=np.float32))  # on CPU for now
+    cad_pc = torch.tensor(np.loadtxt(cad_pc_file, dtype=np.float32))
 
     cad_centroid = cad_pc.mean(dim=0)
     cad_pc = cad_pc - cad_centroid
@@ -189,7 +194,7 @@ def train():
     best_loss = float("inf")
             
     ## Learning Rate Scheduler
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.5)
     
     for epoch in range(config['epochs']):
         log_string(f"Epoch {epoch}/{config['epochs']}")
@@ -211,9 +216,9 @@ def train():
             gt_translation = gt_pose[:, 4:]  # Ground-truth translation (B,3)
 
             # Process keypoints (keypoints normalized)
-            keypoints = keypoints.cuda() # Shape: [11, 40, 5]
-            gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, 40, 3]
-            # gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]
+            keypoints = keypoints.cuda() # Shape: [11, config['num_keypoints'], 5]
+            gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, config['num_keypoints'], 3]
+            # gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, config['num_keypoints']]
 
             optimizer.zero_grad()
             model.train()
@@ -262,8 +267,8 @@ def train():
 
                 # Process keypoints
                 keypoints = keypoints.cuda()
-                gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, 40, 3]
-                # gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, 40]
+                gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, config['num_keypoints'], 3]
+                # gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, config['num_keypoints']]
 
                 loss = pose_criterion(pred_kp, gt_kp)
                 total_val_loss += loss.item()
