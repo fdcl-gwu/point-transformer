@@ -286,8 +286,8 @@ class DecoderLoss(nn.Module):
     def __init__(self, alpha=1.0, beta=1.0, gamma=1.0, delta=1.0, epsilon=1.0):
         super().__init__()
         self.alpha = alpha # Keypoint regression loss
-        self.beta = beta # Rotation alignment loss
-        self.gamma = gamma # Pairwise distance loss
+        self.beta = beta # Centroid alignment loss
+        self.gamma = gamma # Pairwise distance loss (shape loss)
         self.delta = delta # Pose Loss for R,t (higher for simulation, lower for real due to GT pose imprecision) 
         self.epsilon = epsilon # Unused
 
@@ -387,25 +387,12 @@ class DecoderLoss(nn.Module):
         # 1. Keypoint Regression Loss
         keypoint_loss = F.smooth_l1_loss(pred_keypoints, gt_keypoints)
 
-        # 2. Rotation Alignment Loss (Procrustes)
-        def procrustes_loss(pred, gt):
-            loss = 0
-            num_sections = pred.shape[1] // 20  # assuming 2 sections
-            for i in range(num_sections):
-                pred_kp = pred[:, i * 20 : (i + 1) * 20, :]
-                gt_kp = gt[:, i * 20 : (i + 1) * 20, :]
-
-                pred_centered = pred_kp - pred_kp.mean(dim=1, keepdim=True)
-                gt_centered = gt_kp - gt_kp.mean(dim=1, keepdim=True)
-                U, _, V = torch.svd(torch.bmm(gt_centered.transpose(1, 2), pred_centered))
-                R = torch.bmm(U, V.transpose(1, 2))
-                aligned = torch.bmm(gt_centered, R)
-                loss += F.smooth_l1_loss(aligned, pred_centered)
-            return loss / num_sections
-
-        rot_loss_val = procrustes_loss(pred_keypoints, gt_keypoints)
-
-        # 3. Pairwise Distance Loss
+        # 2. Centroid Loss
+        centroid_loss = F.smooth_l1_loss(
+            pred_keypoints.mean(dim=1), 
+            gt_keypoints.mean(dim=1)
+        )
+        # 3. Pairwise Distance Loss (i.e. Shape Loss)
         def pairwise_dist_loss(pred, gt):
             B, N, _ = pred.shape
             pd_pred = torch.cdist(pred, pred, p=2)
@@ -420,7 +407,7 @@ class DecoderLoss(nn.Module):
         # Final combined loss
         total_loss = (
             self.alpha * keypoint_loss +
-            self.beta * rot_loss_val +
+            self.beta * centroid_loss +
             self.gamma * shape_loss_val +
             self.delta * pose_loss
         )

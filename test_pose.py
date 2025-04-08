@@ -46,9 +46,9 @@ def test():
             'K': 64,
             'd_m': 512,
             'alpha': 2,
-            'beta': 5,
-            'gamma': 3,
-            'delta': 0.001,
+            'beta': 4,
+            'gamma': 3.5,
+            'delta': 0.0005,
             'epsilon': 1,
             'radius_max_points': 32,
             'radius': 0.2,
@@ -80,7 +80,7 @@ def test():
         logger.info(f"Pose Estimation Loss: {loss:.6f}\n")
  
     data_path = 'data/SimNet_close'
-    cad_keypoint_file = 'data/cad_keypoints_40_cfg_st_dg_few.txt'
+    cad_keypoint_file = 'data/cad_keypoints_4-_cfg_st_dg_few_-05.txt'
     cad_pc_file = "data/rotated_Ship_copy_downsampled_neg05.txt"
     dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
@@ -133,7 +133,7 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-04-08_12-00/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-04-08_16-45/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights
