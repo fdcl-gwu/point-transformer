@@ -45,10 +45,10 @@ def test():
             'M': 4,
             'K': 64,
             'd_m': 512,
-            'alpha': 4,
-            'beta': 6,
-            'gamma': 5,
-            'delta': 1,
+            'alpha': 2,
+            'beta': 5,
+            'gamma': 3,
+            'delta': 0.001,
             'epsilon': 1,
             'radius_max_points': 32,
             'radius': 0.2,
@@ -127,7 +127,7 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-04-03_13-56/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-04-07_14-19/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights
@@ -149,17 +149,25 @@ def test():
             scale = scale.cuda()
 
             model.eval()
-            pred_kp = model(points, centroid, scale)
+            pred_kp, pred_R, pred_t = model(points, centroid, scale)
 
             gt_rotation = gt_pose[:, :4] #still in WXYZ (as dataset stores it)
             gt_translation = gt_pose[:, 4:]
+
+            # Convert rotations to rotation numpy matrices
+            gt_quat_wxyz = gt_rotation.cpu().numpy()  # shape [B, 4]
+            gt_rot_matrices = R.from_quat(gt_quat_wxyz[:, [1, 2, 3, 0]]).as_matrix()  # convert WXYZ → XYZW before conversion
+
+            pred_rot_matrices = pred_R.cpu().numpy()  # assuming already rotation matrices
+            pred_translation_np = pred_t.cpu().numpy()
+            gt_translation_np = gt_translation.cpu().numpy()
 
             # Process keypoints
             keypoints = keypoints.cuda()
             gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, config['num_keypoints'], 3
             # gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, config['num_keypoints']]
 
-            loss = pose_criterion(pred_kp, gt_kp)
+            loss = pose_criterion(pred_kp, gt_kp, pred_R, gt_rotation, pred_t, gt_translation)
             # # Convert angle-axis to quaternion for logging
             # pred_r_np = pred_r.cpu().numpy()
             # pred_quat = np.array([R.from_rotvec(r).as_quat() for r in pred_r_np])  # NOTE: scipy pred_quat has XYZW format!
@@ -177,11 +185,14 @@ def test():
             for i in range(len(gt_rotation)):
                 result_data.append({
                     "gt_kp": gt_kp_np[i].tolist(),
-                    # "gt_sec": gt_sec_np[i].tolist(),
                     "pred_kp": pred_kp_np[i].tolist(),
-                    # "pred_sec": pred_sec_np[i].tolist(),
-                    "loss": loss.item()
+                    "gt_rotation": gt_rot_matrices[i].tolist(),
+                    "gt_translation": gt_translation_np[i].tolist(),
+                    "pred_rotation": pred_rot_matrices[i].tolist(),
+                    "pred_translation": pred_translation_np[i].tolist(),
+                    # "loss": loss.item()
                 })
+
 
             # Retrieve file names for this batch
             batch_start_idx = batch_idx * config['batch_size']

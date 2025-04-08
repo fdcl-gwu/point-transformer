@@ -48,53 +48,248 @@ def create_rFF3d(channel_list, num_points, dim):
 
     return rFF
 
+# Adapted from https://zpl.fi/aligning-point-patterns-with-kabsch-umeyama-algorithm/
+def diff_umeyama(source, target, eps=1e-9):
+    """
+    source: [B, N, 3] - CAD keypoints (in canonical/object frame)
+    target: [B, N, 3] - predicted scan keypoints (in world frame)
+    Returns: R [B, 3, 3], t [B, 3]
+    """
+    B, N, _ = source.shape
+    # Center the points around their centroid
+    source_mean = source.mean(dim=1, keepdim=True)
+    target_mean = target.mean(dim=1, keepdim=True)
 
-class PoseLoss(nn.Module):
-    def __init__(self, alpha=1.0, beta=1.0):
-        """
-        Pose loss for 6DOF estimation using:
-        - Geodesic loss for rotation (axis-angle representation)
-        - L2 loss for translation residual
-        - Alpha scales the translation loss
-        - Beta scales the rotation loss
-        """
-        super(PoseLoss, self).__init__()
-        self.alpha = alpha  # Scaling factor for translation loss
-        self.beta = beta # Scaling factor for rotation loss
+    source_centered = source - source_mean
+    target_centered = target - target_mean
 
-    def forward(self, pred_r, gt_q, pred_t, gt_t):
-        """
-        Compute total pose loss:
-        - Convert predicted axis-angle to rotation matrix.
-        - Convert ground truth quaternion to rotation matrix.
-        - Compute geodesic distance for rotation loss.
-        - Compute L2 loss for translation residual.
+    # Covariance matrix: H = Xᵀ Y
+    H = torch.matmul(source_centered.transpose(1, 2), target_centered) / N  # [B, 3, 3]
 
-        Inputs:
-        - pred_r: Predicted rotation in axis-angle (B, 3)
-        - gt_q: Ground truth rotation in quaternion (B, 4), wxyz format
-        - pred_t: Predicted translation residual (B, 3)
-        - gt_t: Ground truth translation (B, 3)
+    # SVD
+    U, S, Vt = torch.linalg.svd(H)
+    V = Vt.transpose(-2, -1)  # [B, 3, 3]
 
-        Output:
-        - Total loss: geodesic loss + weighted translation loss
-        """
-        # Convert ground truth quaternion to rotation matrix
-        R_gt = self.quaternion_to_rotation_matrix(gt_q)
+    # Compute determinant sign
+    det_U = torch.det(U)  # [B]
+    det_V = torch.det(V)  # [B]
+    d = (det_U * det_V).sign()  # [B], should be +1 unless reflection
 
-        # Convert predicted axis-angle to rotation matrix
-        R_pred = self.axis_angle_to_rotation_matrix(pred_r)
+    # Build S matrix: diag(1, 1, d)
+    eye = torch.eye(3, device=source.device).unsqueeze(0).repeat(B, 1, 1)  # [B, 3, 3]
+    S_mat = eye.clone()
+    S_mat[:, 2, 2] = d  # put `d` in (2,2) to flip last axis if needed
 
-        # Compute geodesic loss for rotation
-        loss_r = self.geodesic_loss(R_pred, R_gt)
+    # Final rotation: R = U S Vᵀ
+    R = torch.matmul(torch.matmul(U, S_mat), V.transpose(-2, -1))  # [B, 3, 3]
 
-        # Compute L2 loss for translation (as before)
-        loss_t = torch.linalg.vector_norm(pred_t - gt_t, ord=2, dim=-1).mean()
+    # Translation: t = μ_target - R * μ_source
+    t = target_mean.squeeze(1) - torch.matmul(R, source_mean.squeeze(1).unsqueeze(-1)).squeeze(-1)  # [B, 3]
 
-        # Weighted total loss
-        total_loss = (self.alpha * loss_t) + (self.beta * loss_r)
+    return R, t
 
-        return total_loss
+# class PoseLoss(nn.Module):
+#     def __init__(self, alpha=1.0, beta=1.0):
+#         """
+#         Pose loss for 6DOF estimation using:
+#         - Geodesic loss for rotation (axis-angle representation)
+#         - L2 loss for translation residual
+#         - Alpha scales the translation loss
+#         - Beta scales the rotation loss
+#         """
+#         super(PoseLoss, self).__init__()
+#         self.alpha = alpha  # Scaling factor for translation loss
+#         self.beta = beta # Scaling factor for rotation loss
+
+#     def forward(self, pred_r, gt_q, pred_t, gt_t):
+#         """
+#         Compute total pose loss:
+#         - Convert predicted axis-angle to rotation matrix.
+#         - Convert ground truth quaternion to rotation matrix.
+#         - Compute geodesic distance for rotation loss.
+#         - Compute L2 loss for translation residual.
+
+#         Inputs:
+#         - pred_r: Predicted rotation in axis-angle (B, 3)
+#         - gt_q: Ground truth rotation in quaternion (B, 4), wxyz format
+#         - pred_t: Predicted translation residual (B, 3)
+#         - gt_t: Ground truth translation (B, 3)
+
+#         Output:
+#         - Total loss: geodesic loss + weighted translation loss
+#         """
+#         # Convert ground truth quaternion to rotation matrix
+#         R_gt = self.quaternion_to_rotation_matrix(gt_q)
+
+#         # Convert predicted axis-angle to rotation matrix
+#         R_pred = self.axis_angle_to_rotation_matrix(pred_r)
+
+#         # Compute geodesic loss for rotation
+#         loss_r = self.geodesic_loss(R_pred, R_gt)
+
+#         # Compute L2 loss for translation (as before)
+#         loss_t = torch.linalg.vector_norm(pred_t - gt_t, ord=2, dim=-1).mean()
+
+#         # Weighted total loss
+#         total_loss = (self.alpha * loss_t) + (self.beta * loss_r)
+
+#         return total_loss
+
+#     def quaternion_to_rotation_matrix(self, q):
+#         """
+#         Converts a quaternion (B, 4) to a rotation matrix (B, 3, 3).
+#         """
+#         q = F.normalize(q, dim=-1)  # Ensure the quaternion is normalized
+#         w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+
+#         B = q.shape[0]
+#         R = torch.zeros((B, 3, 3), device=q.device)
+
+#         R[:, 0, 0] = 1 - 2 * (y**2 + z**2)
+#         R[:, 0, 1] = 2 * (x * y - w * z)
+#         R[:, 0, 2] = 2 * (x * z + w * y)
+#         R[:, 1, 0] = 2 * (x * y + w * z)
+#         R[:, 1, 1] = 1 - 2 * (x**2 + z**2)
+#         R[:, 1, 2] = 2 * (y * z - w * x)
+#         R[:, 2, 0] = 2 * (x * z - w * y)
+#         R[:, 2, 1] = 2 * (y * z + w * x)
+#         R[:, 2, 2] = 1 - 2 * (x**2 + y**2)
+
+#         return R
+
+#     def axis_angle_to_rotation_matrix(self, axis_angle):
+#         """
+#         Converts an axis-angle vector (B, 3) to a rotation matrix (B, 3, 3) using the exponential map.
+        
+#         # Rodrigues' formula for rotation matrix with:
+
+#                     axis_angle = r
+#                     theta = ||r|| (2-norm)
+#                     axis = r / ||r||
+#         """
+#         theta = torch.linalg.vector_norm(axis_angle, dim=1, keepdim=True)
+#         eps = 1e-6
+#         axis = axis_angle / (theta + eps)
+#         theta = theta.squeeze(1)  # Shape [B]
+
+#         zeros = torch.zeros_like(theta)
+#         # K is already normalized from axis above, so no need to divide by theta like in the paper
+#         K = torch.stack([
+#             zeros, -axis[:, 2], axis[:, 1],
+#             axis[:, 2], zeros, -axis[:, 0],
+#             -axis[:, 1], axis[:, 0], zeros
+#         ], dim=1).reshape(-1, 3, 3)
+
+#         I = torch.eye(3, device=axis.device).unsqueeze(0)
+#         sin_theta = torch.sin(theta).view(-1, 1, 1)  # (B, 1, 1)
+#         cos_theta = (1 - torch.cos(theta)).view(-1, 1, 1)  # (B, 1, 1)
+
+#         # Rodrigues' formula to rotation matrix
+#         R = I + sin_theta * K + cos_theta * torch.matmul(K, K)
+
+#         return R
+
+#     def geodesic_loss(self, R_pred, R_gt):
+#         """
+#         Computes the geodesic loss between two rotation matrices.
+#         Loss formula:
+#         L_r = arccos( (trace(R_pred * R_gt^T) - 1) / 2 )
+#         """
+
+#         # Compute trace of (R_pred * R_gt^T)
+#         trace_val = torch.einsum('bii->b', torch.matmul(R_pred, R_gt.transpose(1, 2))) #dim 0 is batch size
+
+#         # Clamp to avoid numerical errors leading to NaNs
+#         trace_val = torch.clamp((trace_val - 1) / 2, -1.0, 1.0)
+
+#         # Compute geodesic loss
+#         loss_r = torch.acos(trace_val)
+
+#         return loss_r.mean()    
+
+# class KPLoss(nn.Module):
+#     def __init__(self, alpha=1.0, beta=1.0):
+#         super().__init__()
+#         self.alpha = 1  # Class (cross entropy) scaling
+#         self.beta = 3   # Smooth L1 scaling for regression
+#         self.delta = 5 # rotation loss scaling
+#         self.epsilon = 6 # center loss scaling
+
+#     def forward(self, pred_keypoints, gt_keypoints, pred_section_logits, gt_section_label):
+#         """
+#         Parameters:
+#           pred_keypoints: Tensor [B, num_keypoints, 3]
+#           gt_keypoints: Tensor [B, num_keypoints, 3]
+#           pred_section_logits: Tensor [B, num_keypoints, num_sections]
+#           gt_section_label: Tensor [B, num_keypoints] (class indices)
+
+#         Returns:
+#           total_loss: scalar (combination of classification, keypoint regression, and structure constraints)
+#         """
+
+#         # 1. Keypoint Regression Loss (Smooth L1)
+#         keypoint_loss = F.smooth_l1_loss(pred_keypoints, gt_keypoints)
+
+#         # 2. Classification Loss for Keypoint Labels (Cross-Entropy)
+#         section_loss = F.cross_entropy(
+#             pred_section_logits.view(-1, pred_section_logits.size(-1)), 
+#             gt_section_label.view(-1)
+#         )
+
+#         # 3. Rotation Alignment Loss (Procrustes Analysis for Rotation Consistency)
+#         def rotation_loss(pred_keypoints, gt_keypoints):
+#             """Apply rotation loss per section."""
+#             loss = 0
+#             num_sections = pred_keypoints.shape[1] // 20
+#             for i in range(num_sections):
+#                 pred = pred_keypoints[:, i * 20 : (i + 1) * 20, :3]
+#                 gt = gt_keypoints[:, i * 20 : (i + 1) * 20, :3]
+#                 pred_centered = pred - pred.mean(dim=1, keepdim=True)
+#                 gt_centered = gt - gt.mean(dim=1, keepdim=True)
+#                 U, _, V = torch.svd(torch.bmm(gt_centered.transpose(1, 2), pred_centered))
+#                 R = torch.bmm(U, V.transpose(1, 2))
+#                 pred_aligned = torch.bmm(pred_centered, R)
+#                 loss += F.smooth_l1_loss(pred_aligned, gt_centered)
+#             return loss / num_sections
+
+#         rot_loss_val = rotation_loss(pred_keypoints, gt_keypoints)
+
+#         # 4. Center Alignment Loss (Ensures predicted centroids match ground truth)
+#         def center_loss(pred_keypoints, gt_keypoints):
+#             """Ensure predicted section centers align with GT centers."""
+#             loss = 0
+#             num_sections = pred_keypoints.shape[1] // 20
+#             for i in range(num_sections):
+#                 pred_center = torch.mean(pred_keypoints[:, i * 20 : (i + 1) * 20, :3], dim=1)
+#                 gt_center = torch.mean(gt_keypoints[:, i * 20 : (i + 1) * 20, :3], dim=1)
+#                 loss += F.smooth_l1_loss(pred_center, gt_center)
+#             return loss / num_sections
+        
+#         cent_loss_val = center_loss(pred_keypoints, gt_keypoints)
+
+#         # Final combined loss
+#         total_loss = (
+#             self.alpha * section_loss +
+#             self.beta * keypoint_loss +
+#             self.delta * rot_loss_val +
+#             self.epsilon * cent_loss_val
+#         )
+
+#         # print(f"KPLoss: keypoint_loss: {keypoint_loss.item()}, section_loss: {section_loss.item()}, "
+#         #       f"rot_loss: {rot_loss_val.item()}, center_loss: {cent_loss_val.item()}, "
+#         #       f"total_loss: {total_loss.item()}")
+
+#         return total_loss
+ 
+
+class DecoderLoss(nn.Module):
+    def __init__(self, alpha=1.0, beta=1.0, gamma=1.0, delta=1.0, epsilon=1.0):
+        super().__init__()
+        self.alpha = alpha # Keypoint regression loss
+        self.beta = beta # Rotation alignment loss
+        self.gamma = gamma # Pairwise distance loss
+        self.delta = delta # Pose Loss for R,t (higher for simulation, lower for real due to GT pose imprecision) 
+        self.epsilon = epsilon # Unused
 
     def quaternion_to_rotation_matrix(self, q):
         """
@@ -156,7 +351,6 @@ class PoseLoss(nn.Module):
         Loss formula:
         L_r = arccos( (trace(R_pred * R_gt^T) - 1) / 2 )
         """
-
         # Compute trace of (R_pred * R_gt^T)
         trace_val = torch.einsum('bii->b', torch.matmul(R_pred, R_gt.transpose(1, 2))) #dim 0 is batch size
 
@@ -166,93 +360,21 @@ class PoseLoss(nn.Module):
         # Compute geodesic loss
         loss_r = torch.acos(trace_val)
 
-        return loss_r.mean()    
+        return loss_r.mean()  
+    
+    def pose_loss(self, pred_R, gt_q, pred_t, gt_t):
+        # NOTE: In DecoderLoss(), pred_R is predicted as rotation matrix. gt is still in quaternion.
+        # Convert ground truth quaternion to rotation matrix
+        gt_R = self.quaternion_to_rotation_matrix(gt_q)
 
-class KPLoss(nn.Module):
-    def __init__(self, alpha=1.0, beta=1.0):
-        super().__init__()
-        self.alpha = 1  # Class (cross entropy) scaling
-        self.beta = 3   # Smooth L1 scaling for regression
-        self.delta = 5 # rotation loss scaling
-        self.epsilon = 6 # center loss scaling
+        # Compute geodesic loss for rotation
+        rot_loss = self.geodesic_loss(pred_R, gt_R) #don't use PoseLoss forward(), just its functions
 
-    def forward(self, pred_keypoints, gt_keypoints, pred_section_logits, gt_section_label):
-        """
-        Parameters:
-          pred_keypoints: Tensor [B, num_keypoints, 3]
-          gt_keypoints: Tensor [B, num_keypoints, 3]
-          pred_section_logits: Tensor [B, num_keypoints, num_sections]
-          gt_section_label: Tensor [B, num_keypoints] (class indices)
-
-        Returns:
-          total_loss: scalar (combination of classification, keypoint regression, and structure constraints)
-        """
-
-        # 1. Keypoint Regression Loss (Smooth L1)
-        keypoint_loss = F.smooth_l1_loss(pred_keypoints, gt_keypoints)
-
-        # 2. Classification Loss for Keypoint Labels (Cross-Entropy)
-        section_loss = F.cross_entropy(
-            pred_section_logits.view(-1, pred_section_logits.size(-1)), 
-            gt_section_label.view(-1)
-        )
-
-        # 3. Rotation Alignment Loss (Procrustes Analysis for Rotation Consistency)
-        def rotation_loss(pred_keypoints, gt_keypoints):
-            """Apply rotation loss per section."""
-            loss = 0
-            num_sections = pred_keypoints.shape[1] // 20
-            for i in range(num_sections):
-                pred = pred_keypoints[:, i * 20 : (i + 1) * 20, :3]
-                gt = gt_keypoints[:, i * 20 : (i + 1) * 20, :3]
-                pred_centered = pred - pred.mean(dim=1, keepdim=True)
-                gt_centered = gt - gt.mean(dim=1, keepdim=True)
-                U, _, V = torch.svd(torch.bmm(gt_centered.transpose(1, 2), pred_centered))
-                R = torch.bmm(U, V.transpose(1, 2))
-                pred_aligned = torch.bmm(pred_centered, R)
-                loss += F.smooth_l1_loss(pred_aligned, gt_centered)
-            return loss / num_sections
-
-        rot_loss_val = rotation_loss(pred_keypoints, gt_keypoints)
-
-        # 4. Center Alignment Loss (Ensures predicted centroids match ground truth)
-        def center_loss(pred_keypoints, gt_keypoints):
-            """Ensure predicted section centers align with GT centers."""
-            loss = 0
-            num_sections = pred_keypoints.shape[1] // 20
-            for i in range(num_sections):
-                pred_center = torch.mean(pred_keypoints[:, i * 20 : (i + 1) * 20, :3], dim=1)
-                gt_center = torch.mean(gt_keypoints[:, i * 20 : (i + 1) * 20, :3], dim=1)
-                loss += F.smooth_l1_loss(pred_center, gt_center)
-            return loss / num_sections
-        
-        cent_loss_val = center_loss(pred_keypoints, gt_keypoints)
-
-        # Final combined loss
-        total_loss = (
-            self.alpha * section_loss +
-            self.beta * keypoint_loss +
-            self.delta * rot_loss_val +
-            self.epsilon * cent_loss_val
-        )
-
-        # print(f"KPLoss: keypoint_loss: {keypoint_loss.item()}, section_loss: {section_loss.item()}, "
-        #       f"rot_loss: {rot_loss_val.item()}, center_loss: {cent_loss_val.item()}, "
-        #       f"total_loss: {total_loss.item()}")
-
-        return total_loss
- 
-
-class DecoderLoss(nn.Module):
-    def __init__(self, alpha=1.0, beta=1.0, gamma=1.0, delta=1.0, epsilon=1.0):
-        super().__init__()
-        self.alpha = alpha # Keypoint regression loss
-        self.beta = beta # Rotation alignment loss
-        self.gamma = gamma # Pairwise distance loss
-        self.delta = delta # Unused
-        self.epsilon = epsilon # Unused
-
-    def forward(self, pred_keypoints, gt_keypoints):
+        # Translation loss (L1 or L2)
+        trans_loss = F.smooth_l1_loss(pred_t, gt_t)
+        return rot_loss + trans_loss
+    
+    def forward(self, pred_keypoints, gt_keypoints, pred_r, gt_q, pred_t, gt_t):
         """
         Parameters:
           pred_keypoints: Tensor [B, num_keypoints, 3]
@@ -292,17 +414,21 @@ class DecoderLoss(nn.Module):
 
         shape_loss_val = pairwise_dist_loss(pred_keypoints, gt_keypoints)
 
+        # 4. Pose Loss
+        pose_loss = self.pose_loss(pred_r, gt_q, pred_t, gt_t)
+
         # Final combined loss
         total_loss = (
             self.alpha * keypoint_loss +
             self.beta * rot_loss_val +
-            self.gamma * shape_loss_val
+            self.gamma * shape_loss_val +
+            self.delta * pose_loss
         )
-
+        
         return total_loss
 
 class Point_Transformer(nn.Module):
-    def __init__(self, config, cad_kp):
+    def __init__(self, config, cad_kp, cad_centroid, cad_scale):
         super(Point_Transformer, self).__init__()
         
         # Parameters
@@ -391,6 +517,8 @@ class Point_Transformer(nn.Module):
         
         # UNCOMMENT for CAD keypoints in canonical object frame (size [self.num_keypoints, 3])
         self.register_buffer("cad_keypoints", cad_kp.clone().detach().float())
+        self.register_buffer("cad_centroid", cad_centroid.clone().detach().float())
+        self.register_buffer("cad_scale", cad_scale.clone().detach().float())
 
         # MLP to project CAD coords to decoder query features
         self.kp_embed = nn.Sequential(
@@ -526,9 +654,28 @@ class Point_Transformer(nn.Module):
         decoder_out = decoder_out.permute(1, 0, 2)  # [B, num_kp, C]
 
         pred_keypoints = self.kp_out_head(decoder_out)  # [B, num_kp, 3]
-        # pred_keypoints = pred_keypoints * scale.view(-1, 1, 1) + centroid.view(-1, 1, 3)
 
-        return pred_keypoints
+        #############################################
+        ## Pose Estimation
+        #############################################
+        # apply scale and centroid back to keypoints and cad_keypoints
+        B = pred_keypoints.shape[0] # batch size to broadcast cad_kp_global along batch dim
+
+        cad_keypoints_global = self.cad_keypoints * self.cad_scale.view(1, 1) + self.cad_centroid.view(1, 3)  # [40, 3]
+        cad_keypoints_global = cad_keypoints_global.unsqueeze(0).expand(B, -1, -1)  # [B, 40, 3]
+
+        pred_keypoints_global = pred_keypoints * scale.view(-1, 1, 1) + centroid.view(-1, 1, 3)  # [B, 40, 3]
+        # keypoints now in same, original scale+centroid    
+
+        # uses the global, not normalized keypoints
+        R, t = diff_umeyama(cad_keypoints_global, pred_keypoints_global)
+
+        # Check alignment error
+        cad_keypoints_transformed = torch.matmul(cad_keypoints_global, R.transpose(1, 2)) + t.unsqueeze(1)
+        alignment_error = torch.norm(cad_keypoints_transformed - pred_keypoints_global, dim=-1).mean()
+        print("Alignment error after pose estimation:", alignment_error.item())
+
+        return pred_keypoints, R, t
 
 class SortNet(nn.Module):
     def __init__(self, num_feat, input_dims, actv_fn=F.relu, top_k = 5):

@@ -49,9 +49,9 @@ def train():
             'K': 64,
             'd_m': 512,
             'alpha': 2,
-            'beta': 5,
-            'gamma': 3,
-            'delta': 1,
+            'beta': 3,
+            'gamma': 5,
+            'delta': 0.0005,
             'epsilon': 1,
             'radius_max_points': 32,
             'radius': 0.2,
@@ -123,19 +123,25 @@ def train():
     cad_kp = torch.tensor(np.loadtxt(cad_keypoint_file, dtype=np.float32))  # on CPU for now
     cad_pc = torch.tensor(np.loadtxt(cad_pc_file, dtype=np.float32))
 
-    cad_centroid = cad_pc.mean(dim=0)
+    cad_centroid = cad_pc.mean(dim=0) # for centering whole ship cloud (not ship keypoints cloud)
     cad_pc = cad_pc - cad_centroid
     cad_scale = cad_pc.norm(dim=1).max()
 
     if config['unit_sphere']:
         cad_pc = cad_pc / cad_scale
         cad_kp = (cad_kp - cad_centroid) / cad_scale
+        print("cad_centroid: ", cad_centroid, " and cad_scale: ", cad_scale)
 
     cad_kp = cad_kp.cuda()
     cad_pc = cad_pc.cuda()
 
     ## Create Point Transformer model
-    model = pt_pose.Point_Transformer(config, cad_kp).cuda()
+    model = pt_pose.Point_Transformer(
+        config,
+        cad_kp=cad_kp.cuda(),
+        cad_centroid=cad_centroid.cuda(),
+        cad_scale=cad_scale.cuda()
+    ).cuda()
     # model = pt_pose.SortNet(128/home/karlsimon/point-transformer/log/pose_estimation/2025-02-16_18-53,6, top_k=64).cuda()
     
     def count_parameters(model):
@@ -223,8 +229,10 @@ def train():
             optimizer.zero_grad()
             model.train()
 
-            pred_kp = model(points, centroid, scale)
-            loss = pose_criterion(pred_kp, gt_kp)
+            pred_kp, pred_R, pred_t = model(points, centroid, scale)
+
+            use_pose_loss = 20 #epoch after which the pose_loss is used in DecoderLoss
+            loss = pose_criterion(pred_kp, gt_kp, pred_R, gt_rotation, pred_t, gt_translation)
             if torch.isnan(loss):
                 print(f"Epoch {epoch}, Batch {batch_idx}: NaN loss detected!")
                 # print(f"pred_r: {pred_r}")
@@ -260,7 +268,7 @@ def train():
                 scale = scale.cuda()
 
                 model.eval()
-                pred_kp = model(points, centroid, scale)
+                pred_kp, pred_R, pred_t = model(points, centroid, scale)
 
                 gt_rotation = gt_pose[:, :4]
                 gt_translation = gt_pose[:, 4:]
@@ -270,7 +278,7 @@ def train():
                 gt_kp = keypoints[:, :, :3]  # Extract XYZ coordinates → [B, config['num_keypoints'], 3]
                 # gt_sec = torch.argmax(keypoints[:, :, 3:], dim=-1)  # [B, config['num_keypoints']]
 
-                loss = pose_criterion(pred_kp, gt_kp)
+                loss = pose_criterion(pred_kp, gt_kp, pred_R, gt_rotation, pred_t, gt_translation)
                 total_val_loss += loss.item()
 
             avg_val_loss = total_val_loss / len(test_dl)
