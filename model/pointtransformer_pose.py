@@ -670,11 +670,6 @@ class Point_Transformer(nn.Module):
         # uses the global, not normalized keypoints
         R, t = diff_umeyama(cad_keypoints_global, pred_keypoints_global)
 
-        # Check alignment error
-        cad_keypoints_transformed = torch.matmul(cad_keypoints_global, R.transpose(1, 2)) + t.unsqueeze(1)
-        alignment_error = torch.norm(cad_keypoints_transformed - pred_keypoints_global, dim=-1).mean()
-        print("Alignment error after pose estimation:", alignment_error.item())
-
         return pred_keypoints, R, t
 
 class SortNet(nn.Module):

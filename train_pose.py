@@ -21,7 +21,7 @@ torch.manual_seed(42)
 def train():
 
     # To check CUDA and PyTorch installation: $ conda list | grep 'pytorch\|cudatoolkit'
-    device_id = 1  # Change this to 1 to use the second GPU
+    device_id = 0  # Change this to 1 to use the second GPU
     torch.cuda.set_device(device_id)
 
     if torch.cuda.is_available():
@@ -49,8 +49,8 @@ def train():
             'K': 64,
             'd_m': 512,
             'alpha': 2,
-            'beta': 3,
-            'gamma': 5,
+            'beta': 4,
+            'gamma': 3.5,
             'delta': 0.0005,
             'epsilon': 1,
             'radius_max_points': 32,
@@ -90,7 +90,7 @@ def train():
 
     # UNCOMMENT FOR SimNet
     data_path = 'data/SimNet_close'
-    cad_keypoint_file = 'data/cad_keypoints_40_cfg_st_dg_few.txt'
+    cad_keypoint_file = 'data/cad_keypoints_4-_cfg_st_dg_few_-05.txt'
     cad_pc_file = "data/rotated_Ship_copy_downsampled_neg05.txt"
     dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 

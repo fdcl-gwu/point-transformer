@@ -98,22 +98,28 @@ def test():
     print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
 
     # Load CAD points, keypoints and normalize ONCE
-    cad_kp = torch.tensor(np.loadtxt(cad_keypoint_file, dtype=np.float32))
+    cad_kp = torch.tensor(np.loadtxt(cad_keypoint_file, dtype=np.float32))  # on CPU for now
     cad_pc = torch.tensor(np.loadtxt(cad_pc_file, dtype=np.float32))
 
-    cad_centroid = cad_pc.mean(dim=0)
+    cad_centroid = cad_pc.mean(dim=0) # for centering whole ship cloud (not ship keypoints cloud)
     cad_pc = cad_pc - cad_centroid
     cad_scale = cad_pc.norm(dim=1).max()
 
     if config['unit_sphere']:
         cad_pc = cad_pc / cad_scale
         cad_kp = (cad_kp - cad_centroid) / cad_scale
+        print("cad_centroid: ", cad_centroid, " and cad_scale: ", cad_scale)
 
     cad_kp = cad_kp.cuda()
     cad_pc = cad_pc.cuda()
 
     ## Create Point Transformer model
-    model = pt_pose.Point_Transformer(config, cad_kp).cuda()
+    model = pt_pose.Point_Transformer(
+        config,
+        cad_kp=cad_kp.cuda(),
+        cad_centroid=cad_centroid.cuda(),
+        cad_scale=cad_scale.cuda()
+    ).cuda()
 
     from helper.summary import summary
     #summary(model, input_data=[(1, 128, 1024),(6, 1024)])
@@ -127,7 +133,7 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-04-07_14-19/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-04-08_12-00/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights
