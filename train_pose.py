@@ -21,7 +21,7 @@ torch.manual_seed(42)
 def train():
 
     # To check CUDA and PyTorch installation: $ conda list | grep 'pytorch\|cudatoolkit'
-    device_id = 0  # Change this to 1 to use the second GPU
+    device_id = 1  # Change this to 1 to use the second GPU
     torch.cuda.set_device(device_id)
 
     if torch.cuda.is_available():
@@ -50,8 +50,8 @@ def train():
             'd_m': 512,
             'alpha': 2,
             'beta': 4,
-            'gamma': 3.5,
-            'delta': 0.0005,
+            'gamma': 5,
+            'delta': 0.0,
             'epsilon': 1,
             'radius_max_points': 32,
             'radius': 0.2,
@@ -119,29 +119,25 @@ def train():
  
     print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
 
-    # Load CAD points, keypoints and normalize ONCE
-    cad_kp = torch.tensor(np.loadtxt(cad_keypoint_file, dtype=np.float32))  # on CPU for now
+    # CAD keypoints — use raw coordinates for decoder queries
+    cad_kp = torch.tensor(np.loadtxt(cad_keypoint_file, dtype=np.float32))  # [40, 3]
     cad_pc = torch.tensor(np.loadtxt(cad_pc_file, dtype=np.float32))
 
-    cad_centroid = cad_pc.mean(dim=0) # for centering whole ship cloud (not ship keypoints cloud)
-    cad_pc = cad_pc - cad_centroid
-    cad_scale = cad_pc.norm(dim=1).max()
+    # Compute scale/centroid from cad_kp (not cad_pc)
+    cad_kp_centroid = cad_kp.mean(dim=0)
+    cad_kp_scale = cad_kp.norm(dim=1).max()
 
-    if config['unit_sphere']:
-        cad_pc = cad_pc / cad_scale
-        cad_kp = (cad_kp - cad_centroid) / cad_scale
-        print("cad_centroid: ", cad_centroid, " and cad_scale: ", cad_scale)
-
+    # Do NOT normalize cad_kp here
     cad_kp = cad_kp.cuda()
     cad_pc = cad_pc.cuda()
 
-    ## Create Point Transformer model
     model = pt_pose.Point_Transformer(
         config,
-        cad_kp=cad_kp.cuda(),
-        cad_centroid=cad_centroid.cuda(),
-        cad_scale=cad_scale.cuda()
+        cad_kp=cad_kp,                     # unnormalized
+        cad_centroid=cad_kp_centroid.cuda(),
+        cad_scale=cad_kp_scale.cuda()
     ).cuda()
+
     # model = pt_pose.SortNet(128/home/karlsimon/point-transformer/log/pose_estimation/2025-02-16_18-53,6, top_k=64).cuda()
     
     def count_parameters(model):

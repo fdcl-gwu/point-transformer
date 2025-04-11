@@ -48,43 +48,52 @@ def create_rFF3d(channel_list, num_points, dim):
 
     return rFF
 
-# Adapted from https://zpl.fi/aligning-point-patterns-with-kabsch-umeyama-algorithm/
-def diff_umeyama(source, target, eps=1e-9):
+# Adapted from https://hunterheidenreich.com/posts/kabsch_algorithm/
+def kabsch_batched(P, Q):
     """
-    source: [B, N, 3] - CAD keypoints (in canonical/object frame)
-    target: [B, N, 3] - predicted scan keypoints (in world frame)
-    Returns: R [B, 3, 3], t [B, 3]
+    Computes the optimal rotation and translation to align two sets of points (P -> Q),
+    and their RMSD, in a batched manner.
+    :param P: A BxNx3 matrix of points
+    :param Q: A BxNx3 matrix of points
+    :return: A tuple containing the optimal rotation matrix, the optimal
+             translation vector, and the RMSD.
     """
-    B, N, _ = source.shape
-    # Center the points around their centroid
-    source_mean = source.mean(dim=1, keepdim=True)
-    target_mean = target.mean(dim=1, keepdim=True)
+    assert P.shape == Q.shape, "Matrix dimensions must match"
 
-    source_centered = source - source_mean
-    target_centered = target - target_mean
+    # Compute centroids
+    centroid_P = torch.mean(P, dim=1, keepdims=True)  # Bx1x3
+    centroid_Q = torch.mean(Q, dim=1, keepdims=True)  #
 
-    # Covariance matrix: H = Xᵀ Y
-    H = torch.matmul(source_centered.transpose(1, 2), target_centered) / N  # [B, 3, 3]
+    # Optimal translation
+    t = centroid_Q - centroid_P  # Bx1x3
+    t = t.squeeze(1)  # Bx3
+
+    # Center the points
+    p = P - centroid_P  # BxNx3
+    q = Q - centroid_Q  # BxNx3
+
+    # Compute the covariance matrix
+    H = torch.matmul(p.transpose(1, 2), q)  # Bx3x3
 
     # SVD
-    U, S, Vt = torch.linalg.svd(H)
-    V = Vt.transpose(-2, -1)  # [B, 3, 3]
+    U, S, Vt = torch.linalg.svd(H)  # Bx3x3
 
-    # Compute determinant sign
-    det_U = torch.det(U)  # [B]
-    det_V = torch.det(V)  # [B]
-    d = (det_U * det_V).sign()  # [B], should be +1 unless reflection
+    # Validate right-handed coordinate system
+    d = torch.det(torch.matmul(Vt.transpose(1, 2), U.transpose(1, 2)))  # B
+    flip = d < 0.0
+    # Create a modified Vt without in-place ops
+    if flip.any().item():
+        Vt_mod = Vt.clone()
+        Vt_mod[flip, :, -1] *= -1.0
+    else:
+        Vt_mod = Vt
 
-    # Build S matrix: diag(1, 1, d)
-    eye = torch.eye(3, device=source.device).unsqueeze(0).repeat(B, 1, 1)  # [B, 3, 3]
-    S_mat = eye.clone()
-    S_mat[:, 2, 2] = d  # put `d` in (2,2) to flip last axis if needed
+    # Optimal rotation
+    R = torch.matmul(Vt_mod.transpose(1, 2), U.transpose(1, 2))
 
-    # Final rotation: R = U S Vᵀ
-    R = torch.matmul(torch.matmul(U, S_mat), V.transpose(-2, -1))  # [B, 3, 3]
 
-    # Translation: t = μ_target - R * μ_source
-    t = target_mean.squeeze(1) - torch.matmul(R, source_mean.squeeze(1).unsqueeze(-1)).squeeze(-1)  # [B, 3]
+    # RMSD
+    rmsd = torch.sqrt(torch.sum(torch.square(torch.matmul(p, R.transpose(1, 2)) - q), dim=(1, 2)) / P.shape[1])
 
     return R, t
 
@@ -411,7 +420,6 @@ class DecoderLoss(nn.Module):
             self.gamma * shape_loss_val +
             self.delta * pose_loss
         )
-        
         return total_loss
 
 class Point_Transformer(nn.Module):
@@ -633,6 +641,9 @@ class Point_Transformer(nn.Module):
         # queries = self.kp_queries.unsqueeze(1).repeat(1, memory.size(1), 1)  # [num_kp, B, C]
         
         # UNCOMMENT for CAD keypoints in canonical object frame
+
+        #       THIS LINE: queries = self.kp_embed(self.cad_keypoints)
+        #       The queries condition the decoder to output where each of these 40 known CAD keypoints should appear in the scan’s normalized frame.
         queries = self.kp_embed(self.cad_keypoints)          # [self.num_keypoints, d_model], cad_keypoints stay the same, but their embeddings don't
         queries = queries.unsqueeze(1).repeat(1, B, 1)       # [self.num_keypoints, B, d_model]
 
@@ -646,18 +657,24 @@ class Point_Transformer(nn.Module):
         ## Pose Estimation
         #############################################
         # apply scale and centroid back to keypoints and cad_keypoints
-        B = pred_keypoints.shape[0] # batch size to broadcast cad_kp_global along batch dim
+        B = pred_keypoints.shape[0]
 
-        cad_keypoints_global = self.cad_keypoints * self.cad_scale.view(1, 1) + self.cad_centroid.view(1, 3)  # [40, 3]
-        cad_keypoints_global = cad_keypoints_global.unsqueeze(0).expand(B, -1, -1)  # [B, 40, 3]
+        # 1. Reconstruct CAD keypoints in original CAD frame (here, self.cad_keypoints are in unnormalized CAD frame)
+        cad_keypoints = self.cad_keypoints.unsqueeze(0).expand(B, -1, -1)  # [B, 40, 3]
 
-        pred_keypoints_global = pred_keypoints * scale.view(-1, 1, 1) + centroid.view(-1, 1, 3)  # [B, 40, 3]
-        # keypoints now in same, original scale+centroid    
+        # 2. Scale predicted keypoints to sensor scale — don't add centroid yet
+        pred_kp_unnormalized = pred_keypoints * scale.view(-1, 1, 1) + centroid.view(-1, 1, 3)  # [B, num_keypoints, 3]
 
-        # uses the global, not normalized keypoints
-        R, t = diff_umeyama(cad_keypoints_global, pred_keypoints_global)
+        # 3. Estimate pose from CAD → scaled prediction space
+        R, t_sensor = kabsch_batched(cad_keypoints, pred_kp_unnormalized)
 
-        return pred_keypoints, R, t
+        # Optional sanity check (uncomment if debugging)
+        # aligned_cad = torch.matmul(cad_keypoints, R.transpose(1, 2)) + t_sensor.unsqueeze(1)
+        # gt_pred_kp = pred_keypoints * scale.view(-1, 1, 1) + centroid.view(-1, 1, 3)
+        # alignment_error = (aligned_cad - gt_pred_kp).norm(dim=-1).mean()
+        # print("Alignment error (sensor frame):", alignment_error.item())
+
+        return pred_keypoints, R, t_sensor
 
 class SortNet(nn.Module):
     def __init__(self, num_feat, input_dims, actv_fn=F.relu, top_k = 5):
