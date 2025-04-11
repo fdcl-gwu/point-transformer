@@ -45,9 +45,9 @@ def test():
             'M': 4,
             'K': 64,
             'd_m': 512,
-            'alpha': 4,
-            'beta': 2,
-            'gamma': 2,
+            'alpha': 2,
+            'beta': 4,
+            'gamma': 5,
             'delta': 0,
             'epsilon': 1,
             'radius_max_points': 32,
@@ -84,16 +84,21 @@ def test():
     cad_pc_file = "data/rotated_Ship_copy_downsampled_neg05.txt"
     dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
-    # Define train-test split ratio
-    train_size = int(0.95 * len(dataset))  # 95% train, 5% test
-    test_size = len(dataset) - train_size
-    train_ds, test_ds = torch.utils.data.random_split(dataset, [train_size, test_size])
+    # Define train-test split ratio (NOT RANDOM)
+    total_samples = len(dataset)
+    train_cutoff = int(0.95 * total_samples)
+
+    train_indices = list(range(train_cutoff))
+    test_indices = list(range(train_cutoff, total_samples))
+
+    train_ds = torch.utils.data.Subset(dataset, train_indices)
+    test_ds = torch.utils.data.Subset(dataset, test_indices)
 
     print(f"First 5 train samples: {[dataset.data_paths[i] for i in train_ds.indices[:5]]}")
     print(f"First 5 test samples: {[dataset.data_paths[i] for i in test_ds.indices[:5]]}")
 
-    train_dl = torch.utils.data.DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=8)
-    test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=8)
+    train_dl = torch.utils.data.DataLoader(train_ds, batch_size=config['batch_size'], shuffle=False, num_workers=0)
+    test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=0)
  
     print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
 
@@ -128,7 +133,7 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-04-10_18-09/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-04-11_19-24/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights
@@ -183,22 +188,25 @@ def test():
             gt_kp_np = gt_kp.cpu().numpy()
             # gt_sec_np = gt_sec.cpu().numpy()
             # write to results.json
+
+            # Retrieve file names for this batch
+            batch_start_idx = batch_idx * config['batch_size']
+            batch_file_names = [dataset.data_paths[test_ds.indices[i]][0] for i in range(batch_start_idx, batch_start_idx + len(gt_rotation))]
+            
             for i in range(len(gt_rotation)):
+                file_name = batch_file_names[i]  # <-- Grab the corresponding filename
                 result_data.append({
+                    "file": file_name,
                     "gt_kp": gt_kp_np[i].tolist(),
                     "pred_kp": pred_kp_np[i].tolist(),
                     "gt_rotation": gt_rot_matrices[i].tolist(),
                     "gt_translation": gt_translation_np[i].tolist(),
                     "pred_rotation": pred_rot_matrices[i].tolist(),
                     "pred_translation": pred_translation_np[i].tolist(),
-                    # "loss": loss.item()
+                    "scale": scale[i].cpu().numpy().tolist(),
+                    "centroid": centroid[i].cpu().numpy().tolist(),
+                    "points": points[i].transpose(0, 1).cpu().numpy().tolist()
                 })
-
-
-            # Retrieve file names for this batch
-            batch_start_idx = batch_idx * config['batch_size']
-            batch_file_names = [dataset.data_paths[test_ds.indices[i]][0] for i in range(batch_start_idx, batch_start_idx + len(gt_rotation))]
-
             print(f"Processed batch {batch_idx + 1}/{len(test_dl)}")
 
     # Save to JSON file

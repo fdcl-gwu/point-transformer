@@ -66,6 +66,7 @@ class SimNetDataLoader(Dataset):
             else:
                 print(f"Warning: No pose file found for {point_file}")
 
+        self.data_paths.sort()
         print(f"Loaded {len(self.data_paths)} samples from {root}.")
 
 
@@ -87,12 +88,11 @@ class SimNetDataLoader(Dataset):
             # NOTE: no FPS for Gazebo scans. done in dataset preprocessing
             point_cloud = point_cloud[:self.npoints, :]
             point_cloud[:, :3], centroid, scale = pc_normalize(point_cloud[:, :3], self.unit_sphere)
-
             # Load the pose data
             pose = load_pose_file(pose_path) # [qx, qy, qz, qw, tx, ty, tz]
             keypoint = np.loadtxt(keypoint_path).astype(np.float32)  # Load keypoints
             keypoint[:, :3] = (keypoint[:, :3] - centroid) / scale  # Normalize keypoints with the same centroid and scale as the point cloud
-            
+            # print("centroid and scale", centroid, scale, "for the file", cloud_path)
             # If label_channel=False, only return xyz coordinates. Otherwise, uses xyzl with l between 0-9
             if not self.label_channel:
                 point_cloud = point_cloud[:, 0:3]
@@ -113,7 +113,7 @@ if __name__ == '__main__':
     import torch
 
     data = SimNetDataLoader('/data/ScanNet/', uniform=False, label_channel=False)
-    DataLoader = torch.utils.data.DataLoader(data, batch_size=12, shuffle=True)
+    DataLoader = torch.utils.data.DataLoader(data, batch_size=12, shuffle=False)
     
     for points, poses, keypoints, centroids, scales in DataLoader:
         print(points.shape)   # Expected: [batch_size, 1024, 3]

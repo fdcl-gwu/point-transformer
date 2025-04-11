@@ -21,7 +21,7 @@ torch.manual_seed(42)
 def train():
 
     # To check CUDA and PyTorch installation: $ conda list | grep 'pytorch\|cudatoolkit'
-    device_id = 1  # Change this to 1 to use the second GPU
+    device_id = 0  # Change this to 1 to use the second GPU
     torch.cuda.set_device(device_id)
 
     if torch.cuda.is_available():
@@ -51,7 +51,7 @@ def train():
             'alpha': 2,
             'beta': 4,
             'gamma': 5,
-            'delta': 0.0,
+            'delta': 0.0001,
             'epsilon': 1,
             'radius_max_points': 32,
             'radius': 0.2,
@@ -94,11 +94,16 @@ def train():
     cad_pc_file = "data/rotated_Ship_copy_downsampled_neg05.txt"
     dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
-    # Define train-test split ratio
-    train_size = int(0.95 * len(dataset))  # 95% train, 5% test
-    test_size = len(dataset) - train_size
-    train_ds, test_ds = torch.utils.data.random_split(dataset, [train_size, test_size])
+    # Define train-test split ratio (NOT RANDOM)
+    total_samples = len(dataset)
+    train_cutoff = int(0.95 * total_samples)
 
+    train_indices = list(range(train_cutoff))
+    test_indices = list(range(train_cutoff, total_samples))
+
+    train_ds = torch.utils.data.Subset(dataset, train_indices)
+    test_ds = torch.utils.data.Subset(dataset, test_indices)
+    
     print(f"First 5 train samples: {[dataset.data_paths[i] for i in train_ds.indices[:5]]}")
     print(f"First 5 test samples: {[dataset.data_paths[i] for i in test_ds.indices[:5]]}")
 
@@ -114,8 +119,8 @@ def train():
 
     print(f"Train set saved to {train_file}, Test set saved to {test_file}")
 
-    train_dl = torch.utils.data.DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=8)
-    test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=8)
+    train_dl = torch.utils.data.DataLoader(train_ds, batch_size=config['batch_size'], shuffle=False, num_workers=0)
+    test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=0)
  
     print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
 

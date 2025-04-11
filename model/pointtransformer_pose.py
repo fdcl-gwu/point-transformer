@@ -51,51 +51,48 @@ def create_rFF3d(channel_list, num_points, dim):
 # Adapted from https://hunterheidenreich.com/posts/kabsch_algorithm/
 def kabsch_batched(P, Q):
     """
-    Computes the optimal rotation and translation to align two sets of points (P -> Q),
-    and their RMSD, in a batched manner.
-    :param P: A BxNx3 matrix of points
-    :param Q: A BxNx3 matrix of points
-    :return: A tuple containing the optimal rotation matrix, the optimal
-             translation vector, and the RMSD.
+    Computes the optimal rotation and translation to align two sets of points (P → Q), in batch.
+    Returns R and t such that: R @ Pᵀ + t ≈ Qᵀ
+    This gives you the pose of P in the Q frame — i.e., in your case: sensor → ship frame.
+
+    Args:
+        P: [B, N, 3] — predicted keypoints (sensor frame, unnormalized)
+        Q: [B, N, 3] — CAD keypoints (ship frame)
+
+    Returns:
+        R: [B, 3, 3] — rotation matrix
+        t: [B, 3]    — translation vector
     """
-    assert P.shape == Q.shape, "Matrix dimensions must match"
+    assert P.shape == Q.shape, "Input point sets must have the same shape"
+    B, N, _ = P.shape
 
     # Compute centroids
-    centroid_P = torch.mean(P, dim=1, keepdims=True)  # Bx1x3
-    centroid_Q = torch.mean(Q, dim=1, keepdims=True)  #
+    centroid_P = torch.mean(P, dim=1, keepdim=True)  # [B, 1, 3]
+    centroid_Q = torch.mean(Q, dim=1, keepdim=True)  # [B, 1, 3]
 
-    # Optimal translation
-    t = centroid_Q - centroid_P  # Bx1x3
-    t = t.squeeze(1)  # Bx3
+    # Center the point clouds
+    p_centered = P - centroid_P
+    q_centered = Q - centroid_Q
 
-    # Center the points
-    p = P - centroid_P  # BxNx3
-    q = Q - centroid_Q  # BxNx3
-
-    # Compute the covariance matrix
-    H = torch.matmul(p.transpose(1, 2), q)  # Bx3x3
+    # Covariance matrix
+    H = torch.matmul(p_centered.transpose(1, 2), q_centered)  # [B, 3, 3]
 
     # SVD
-    U, S, Vt = torch.linalg.svd(H)  # Bx3x3
+    U, S, Vt = torch.linalg.svd(H)
 
-    # Validate right-handed coordinate system
-    d = torch.det(torch.matmul(Vt.transpose(1, 2), U.transpose(1, 2)))  # B
-    flip = d < 0.0
-    # Create a modified Vt without in-place ops
-    if flip.any().item():
-        Vt_mod = Vt.clone()
-        Vt_mod[flip, :, -1] *= -1.0
-    else:
-        Vt_mod = Vt
+    # Handle reflection case
+    d = torch.det(torch.matmul(Vt.transpose(1, 2), U.transpose(1, 2)))  # [B]
+    Vt_adjusted = Vt.clone()
+    Vt_adjusted[d < 0, :, -1] *= -1.0
 
-    # Optimal rotation
-    R = torch.matmul(Vt_mod.transpose(1, 2), U.transpose(1, 2))
+    # Compute optimal rotation
+    R = torch.matmul(Vt_adjusted.transpose(1, 2), U.transpose(1, 2))  # [B, 3, 3]
 
-
-    # RMSD
-    rmsd = torch.sqrt(torch.sum(torch.square(torch.matmul(p, R.transpose(1, 2)) - q), dim=(1, 2)) / P.shape[1])
+    # Compute translation: t = centroid_Q - R @ centroid_P
+    t = centroid_Q.squeeze(1) - torch.bmm(R, centroid_P.transpose(1, 2)).squeeze(2)  # [B, 3]
 
     return R, t
+
 
 # class PoseLoss(nn.Module):
 #     def __init__(self, alpha=1.0, beta=1.0):
@@ -295,8 +292,8 @@ class DecoderLoss(nn.Module):
     def __init__(self, alpha=1.0, beta=1.0, gamma=1.0, delta=1.0, epsilon=1.0):
         super().__init__()
         self.alpha = alpha # Keypoint regression loss
-        self.beta = beta # Centroid alignment loss
-        self.gamma = gamma # Pairwise distance loss (shape loss)
+        self.beta = beta # Rotation alignment loss
+        self.gamma = gamma # Pairwise distance loss
         self.delta = delta # Pose Loss for R,t (higher for simulation, lower for real due to GT pose imprecision) 
         self.epsilon = epsilon # Unused
 
@@ -396,12 +393,25 @@ class DecoderLoss(nn.Module):
         # 1. Keypoint Regression Loss
         keypoint_loss = F.smooth_l1_loss(pred_keypoints, gt_keypoints)
 
-        # 2. Centroid Loss
-        centroid_loss = F.smooth_l1_loss(
-            pred_keypoints.mean(dim=1), 
-            gt_keypoints.mean(dim=1)
-        )
-        # 3. Pairwise Distance Loss (i.e. Shape Loss)
+        # 2. Rotation Alignment Loss (Procrustes)
+        def procrustes_loss(pred, gt):
+            loss = 0
+            num_sections = pred.shape[1] // 20  # assuming 2 sections
+            for i in range(num_sections):
+                pred_kp = pred[:, i * 20 : (i + 1) * 20, :]
+                gt_kp = gt[:, i * 20 : (i + 1) * 20, :]
+
+                pred_centered = pred_kp - pred_kp.mean(dim=1, keepdim=True)
+                gt_centered = gt_kp - gt_kp.mean(dim=1, keepdim=True)
+                U, _, V = torch.svd(torch.bmm(gt_centered.transpose(1, 2), pred_centered))
+                R = torch.bmm(U, V.transpose(1, 2))
+                aligned = torch.bmm(gt_centered, R)
+                loss += F.smooth_l1_loss(aligned, pred_centered)
+            return loss / num_sections
+
+        rot_loss_val = procrustes_loss(pred_keypoints, gt_keypoints)
+
+        # 3. Pairwise Distance Loss
         def pairwise_dist_loss(pred, gt):
             B, N, _ = pred.shape
             pd_pred = torch.cdist(pred, pred, p=2)
@@ -416,10 +426,11 @@ class DecoderLoss(nn.Module):
         # Final combined loss
         total_loss = (
             self.alpha * keypoint_loss +
-            self.beta * centroid_loss +
+            self.beta * rot_loss_val +
             self.gamma * shape_loss_val +
             self.delta * pose_loss
         )
+        
         return total_loss
 
 class Point_Transformer(nn.Module):
@@ -666,13 +677,7 @@ class Point_Transformer(nn.Module):
         pred_kp_unnormalized = pred_keypoints * scale.view(-1, 1, 1) + centroid.view(-1, 1, 3)  # [B, num_keypoints, 3]
 
         # 3. Estimate pose from CAD → scaled prediction space
-        R, t_sensor = kabsch_batched(cad_keypoints, pred_kp_unnormalized)
-
-        # Optional sanity check (uncomment if debugging)
-        # aligned_cad = torch.matmul(cad_keypoints, R.transpose(1, 2)) + t_sensor.unsqueeze(1)
-        # gt_pred_kp = pred_keypoints * scale.view(-1, 1, 1) + centroid.view(-1, 1, 3)
-        # alignment_error = (aligned_cad - gt_pred_kp).norm(dim=-1).mean()
-        # print("Alignment error (sensor frame):", alignment_error.item())
+        R, t_sensor = kabsch_batched(pred_kp_unnormalized, cad_keypoints)
 
         return pred_keypoints, R, t_sensor
 
