@@ -45,10 +45,10 @@ def test():
             'M': 4,
             'K': 64,
             'd_m': 512,
-            'alpha': 2,
+            'alpha': 5,
             'beta': 4,
-            'gamma': 5,
-            'delta': 0,
+            'gamma': 7,
+            'delta': 0.0,
             'epsilon': 1,
             'radius_max_points': 32,
             'radius': 0.2,
@@ -133,7 +133,7 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-04-11_19-24/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-04-11_19-50/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights

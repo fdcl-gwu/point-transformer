@@ -430,7 +430,11 @@ class DecoderLoss(nn.Module):
             self.gamma * shape_loss_val +
             self.delta * pose_loss
         )
-        
+        # print(f"keypoint_loss: {keypoint_loss.item()}, ")
+        # print(f"rot_loss: {rot_loss_val.item()}, ")
+        # print(f"shape_loss: {shape_loss_val.item()}, ")
+        # print(f"pose_loss: {pose_loss.item()}, ")
+
         return total_loss
 
 class Point_Transformer(nn.Module):
