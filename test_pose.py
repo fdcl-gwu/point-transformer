@@ -4,10 +4,13 @@ import os
 import logging
 from pathlib import Path
 import datetime
+import time
 import torch
 import numpy as np
 from tqdm import tqdm
 import json
+import open3d as o3d
+import small_gicp
 from scipy.spatial.transform import Rotation as R
 import model.pointtransformer_pose as pt_pose
 from helper.ScanNetDataLoader import ScanNetDataLoader
@@ -194,8 +197,9 @@ def test():
             batch_file_names = [dataset.data_paths[test_ds.indices[i]][0] for i in range(batch_start_idx, batch_start_idx + len(gt_rotation))]
             
             for i in range(len(gt_rotation)):
-                file_name = batch_file_names[i]  # <-- Grab the corresponding filename
-                result_data.append({
+                # Create base entry first
+                file_name = batch_file_names[i]
+                entry = {
                     "file": file_name,
                     "gt_kp": gt_kp_np[i].tolist(),
                     "pred_kp": pred_kp_np[i].tolist(),
@@ -206,7 +210,47 @@ def test():
                     "scale": scale[i].cpu().numpy().tolist(),
                     "centroid": centroid[i].cpu().numpy().tolist(),
                     "points": points[i].transpose(0, 1).cpu().numpy().tolist()
-                })
+                }
+
+                # Run small_gicp refinement
+                start_time = time.time()
+                scan_points = np.array(points[i].transpose(0, 1).cpu().numpy())
+                centroid_np = centroid[i].cpu().numpy()
+                scale_np = scale[i].cpu().numpy()
+
+                # Unnormalize scan points
+                scan_points_unnorm = scan_points * scale_np + centroid_np
+                ship_points = np.loadtxt(cad_pc_file)
+
+                T_init = np.eye(4)
+                T_init[:3, :3] = pred_rot_matrices[i]
+                T_init[:3, 3] = pred_translation_np[i]
+                print(f"Initial T_target_source:\n{T_init}")
+
+                result = small_gicp.align(
+                    target_points=ship_points,
+                    source_points=scan_points_unnorm,
+                    init_T_target_source=T_init,
+                    registration_type='GICP',
+                    downsampling_resolution=0.05,
+                    max_correspondence_distance=1.0,
+                    num_threads=4,
+                    max_iterations=5,
+                )
+
+                elapsed = time.time() - start_time
+                print(f"Sample {i + 1}: took {elapsed:.3f} seconds")
+
+                # Add refinement results
+                T_refined = result.T_target_source
+                print("Refined T_target_source:\n", T_refined)
+                entry["refined_rotation"] = T_refined[:3, :3].tolist()
+                entry["refined_translation"] = T_refined[:3, 3].tolist()
+                entry["gicp_converged"] = result.converged
+                entry["gicp_iterations"] = result.iterations
+
+                result_data.append(entry)
+
             print(f"Processed batch {batch_idx + 1}/{len(test_dl)}")
 
     # Save to JSON file
