@@ -10,7 +10,6 @@ import numpy as np
 from tqdm import tqdm
 import model.pointtransformer_pose as pt_pose
 from helper.ScanNetDataLoader import ScanNetDataLoader
-# from helper.SimNetDataLoader import SimNetDataLoader
 from helper.optimizer import RangerVA
 import helper.provider as provider
 from torch.utils.tensorboard import SummaryWriter
@@ -84,6 +83,10 @@ def train():
     log_string(config)
  
     # Create DataLoader
+    # # UNCOMMENT FOR ScanNet
+    # data_path = 'data/ScanNet'
+    # dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'])
+
     data_path = 'data/ScanNet'
     cad_keypoint_file = 'data/ship_keypoints_40_cfg_st_dg_few.txt'
     cad_pc_file = "data/yp_complete_cloud_less_dense.txt"
@@ -115,7 +118,7 @@ def train():
     print(f"Train set saved to {train_file}, Test set saved to {test_file}")
 
     train_dl = torch.utils.data.DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=0)
-    test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=0, drop_last=True)
+    test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=0)
  
     print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
 

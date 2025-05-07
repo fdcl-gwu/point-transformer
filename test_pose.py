@@ -14,7 +14,7 @@ import small_gicp
 from scipy.spatial.transform import Rotation as R
 import model.pointtransformer_pose as pt_pose
 from helper.ScanNetDataLoader import ScanNetDataLoader
-from helper.SimNetDataLoader import SimNetDataLoader
+# from helper.SimNetDataLoader import SimNetDataLoader
 from helper.optimizer import RangerVA
 import helper.provider as provider
 
@@ -43,20 +43,20 @@ def test():
             'optimizer': 'RangerVA',
             'lr': 0.001,
             'decay_rate': 1e-06,
-            'epochs': 70,
+            'epochs': 100,
             'dropout': 0.4,
             'M': 4,
             'K': 64,
             'd_m': 512,
             'alpha': 5,
-            'beta': 4,
+            'beta': 0,
             'gamma': 7,
-            'delta': 0.0,
+            'delta': 0,
             'epsilon': 1,
             'radius_max_points': 32,
             'radius': 0.2,
             'unit_sphere': True,
-            'num_keypoints': 40 # must match the number of keypoints in the dataset loaded from SimNetDataLoader
+            'num_keypoints': 40 # must match the number of keypoints in the dataset loaded from ScanNetDataLoader
     }
 
     # Create inference log directory
@@ -82,10 +82,10 @@ def test():
         logger.info(f"Ground Truth Translation: {gt_translation}")
         logger.info(f"Pose Estimation Loss: {loss:.6f}\n")
  
-    data_path = 'data/SimNet_close'
-    cad_keypoint_file = 'data/cad_keypoints_4-_cfg_st_dg_few_-05.txt'
-    cad_pc_file = "data/rotated_Ship_copy_downsampled_neg05.txt"
-    dataset = SimNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
+    data_path = 'data/ScanNet'
+    cad_keypoint_file = 'data/ship_keypoints_40_cfg_st_dg_few.txt'
+    cad_pc_file = "data/yp_complete_cloud_less_dense.txt"
+    dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio (NOT RANDOM)
     total_samples = len(dataset)
@@ -100,8 +100,8 @@ def test():
     print(f"First 5 train samples: {[dataset.data_paths[i] for i in train_ds.indices[:5]]}")
     print(f"First 5 test samples: {[dataset.data_paths[i] for i in test_ds.indices[:5]]}")
 
-    train_dl = torch.utils.data.DataLoader(train_ds, batch_size=config['batch_size'], shuffle=False, num_workers=0)
-    test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=0)
+    train_dl = torch.utils.data.DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=0)
+    test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=0, drop_last=True)
  
     print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
 
@@ -136,7 +136,7 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-04-11_19-50/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-05-05_16-44/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights

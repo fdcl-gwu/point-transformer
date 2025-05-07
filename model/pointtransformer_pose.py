@@ -393,24 +393,6 @@ class DecoderLoss(nn.Module):
         # 1. Keypoint Regression Loss
         keypoint_loss = F.smooth_l1_loss(pred_keypoints, gt_keypoints)
 
-        # 2. Rotation Alignment Loss (Procrustes)
-        def procrustes_loss(pred, gt):
-            loss = 0
-            num_sections = pred.shape[1] // 20  # assuming 2 sections
-            for i in range(num_sections):
-                pred_kp = pred[:, i * 20 : (i + 1) * 20, :]
-                gt_kp = gt[:, i * 20 : (i + 1) * 20, :]
-
-                pred_centered = pred_kp - pred_kp.mean(dim=1, keepdim=True)
-                gt_centered = gt_kp - gt_kp.mean(dim=1, keepdim=True)
-                U, _, V = torch.svd(torch.bmm(gt_centered.transpose(1, 2), pred_centered))
-                R = torch.bmm(U, V.transpose(1, 2))
-                aligned = torch.bmm(gt_centered, R)
-                loss += F.smooth_l1_loss(aligned, pred_centered)
-            return loss / num_sections
-
-        rot_loss_val = procrustes_loss(pred_keypoints, gt_keypoints)
-
         # 3. Pairwise Distance Loss
         def pairwise_dist_loss(pred, gt):
             B, N, _ = pred.shape
@@ -420,20 +402,13 @@ class DecoderLoss(nn.Module):
 
         shape_loss_val = pairwise_dist_loss(pred_keypoints, gt_keypoints)
 
-        # 4. Pose Loss
-        pose_loss = self.pose_loss(pred_r, gt_q, pred_t, gt_t)
-
         # Final combined loss
         total_loss = (
             self.alpha * keypoint_loss +
-            self.beta * rot_loss_val +
-            self.gamma * shape_loss_val +
-            self.delta * pose_loss
+            self.gamma * shape_loss_val
         )
         # print(f"keypoint_loss: {keypoint_loss.item()}, ")
-        # print(f"rot_loss: {rot_loss_val.item()}, ")
         # print(f"shape_loss: {shape_loss_val.item()}, ")
-        # print(f"pose_loss: {pose_loss.item()}, ")
 
         return total_loss
 

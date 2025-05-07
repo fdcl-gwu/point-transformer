@@ -113,7 +113,7 @@ if __name__ == '__main__':
     import torch
 
     data = SimNetDataLoader('/data/ScanNet/', uniform=False, label_channel=False)
-    DataLoader = torch.utils.data.DataLoader(data, batch_size=12, shuffle=False)
+    DataLoader = torch.utils.data.DataLoader(data, batch_size=12, shuffle=True)
     
     for points, poses, keypoints, centroids, scales in DataLoader:
         print(points.shape)   # Expected: [batch_size, 1024, 3]

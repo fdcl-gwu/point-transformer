@@ -6,88 +6,67 @@ import os
 from torch.utils.data import Dataset
 from scipy.spatial.transform import Rotation as R
 import open3d as o3d
+import json
 warnings.filterwarnings('ignore')
 
 
-
-def load_ply_file(filepath):
-    """Load PLY file and return point cloud as a numpy array."""
-    ply = o3d.io.read_point_cloud(filepath)
-    return np.asarray(ply.points, dtype=np.float32)
-
-
 def load_pose_file(filepath, to_quaternion=True):
-    """Load 4x4 transformation matrix and convert to quaternion (if needed)."""
-    pose = np.loadtxt(filepath).astype(np.float32)
-    rotation_matrix = pose[:3, :3]
-    translation = pose[:3, 3]
-
-    if to_quaternion:
-        quat = R.from_matrix(rotation_matrix).as_quat()  # [x, y, z, w]
-        return np.hstack((quat, translation))  # [qx, qy, qz, qw, tx, ty, tz]
-    else:
-        return pose  # Return full 4x4 matrix
+    """Load pose data from a JSON-like format and convert to quaternion (if needed)."""
+    with open(filepath, 'r') as f:
+        pose_data = json.load(f)  # The output from stl_cloud_processing is in json format
     
-# TODO: choose better way of normalizing
-def pc_normalize(pc):
-    centroid = np.mean(pc, axis=0)
-    pc = pc - centroid
-    m = np.max(np.sqrt(np.sum(pc**2, axis=1)))
-    pc = pc / m
-    return pc
+    # Extract translation and quaternion
+    translation = np.array([pose_data["x"], pose_data["y"], pose_data["z"]], dtype=np.float32)
+    quaternion = np.array([pose_data["qw"], pose_data["qx"], pose_data["qy"], pose_data["qz"]], dtype=np.float32)
+    
+    return np.hstack((quaternion, translation))  # [qw, qx, qy, qz, tx, ty, tz]
 
+def pc_normalize(pc, unit_sphere=True):
+    """ Normalize the point cloud: center it and scale to unit sphere.
+        Also return centroid and scale for later use in pose estimation.
+    """
+    centroid = np.mean(pc, axis=0)  # Compute centroid
+    pc = pc - centroid  # Center the cloud
 
-def farthest_point_sample(point, npoint):
-    """
-    Input:
-        xyz: pointcloud data, [N, D]
-        npoint: number of samples
-    Return:
-        centroids: sampled pointcloud index, [npoint, D]
-    """
-    N, D = point.shape
-    xyz = point[:,:3]
-    centroids = np.zeros((npoint,))
-    distance = np.ones((N,)) * 1e10
-    farthest = np.random.randint(0, N)
-    for i in range(npoint):
-        centroids[i] = farthest
-        centroid = xyz[farthest, :]
-        dist = np.sum((xyz - centroid) ** 2, -1)
-        mask = dist < distance
-        distance[mask] = dist[mask]
-        farthest = np.argmax(distance, -1)
-    point = point[centroids.astype(np.int32)]
-    return point
+    scale = np.max(np.sqrt(np.sum(pc**2, axis=1)))  # Compute scale (radius)
+    if unit_sphere:
+        pc = pc / scale # Scale to unit sphere
+
+    return pc, centroid, scale  # Return normalized cloud, centroid, and scale
+
 
 class ScanNetDataLoader(Dataset):
-    def __init__(self, root,  npoint=1024, uniform=False, normal_channel=False, to_quaternion=True, cache_size=15000):
+    def __init__(self, root,  npoint=1024, uniform=False, label_channel=False, cache_size=15000, unit_sphere=True):
         self.root = root # /data/ScanNet
         self.npoints = npoint # 1024
         self.uniform = uniform
-        self.normal_channel = normal_channel
-        self.to_quaternion = to_quaternion
+        self.label_channel = label_channel
         self.cache_size = cache_size  # how many data points to cache in memory
-        self.cache = {}  # from index to (points, poses) tuple
+        self.cache = {}  # from index to (points, poses, keypoints) tuple
+        self.unit_sphere = unit_sphere
 
         self.data_paths = []
-        scan_dirs = [os.path.join(root, d) for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))] # scan_dirs will look like this: ['/data/ScanNet/08_11_yp_1', '/data/ScanNet/08_11_yp_2', ...]
+        scan_dirs = [os.path.join(root, d) for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))] # scan_dirs will look like this: ['/data/ScanNet/datset1', '/data/ScanNet/datset2', ...]
 
         for scan_dir in scan_dirs:
             points_dir = os.path.join(scan_dir, "clouds")
             poses_dir = os.path.join(scan_dir, "poses")
+            keypoints_dir = os.path.join(scan_dir, "keypoints_st_dg_few")
 
-            point_files = sorted([f for f in os.listdir(points_dir) if f.endswith('.ply')])
-            pose_files = sorted([f for f in os.listdir(poses_dir) if f.endswith('.txt')])
+            point_files = sorted([f for f in os.listdir(points_dir)])
+            pose_files = sorted([f for f in os.listdir(poses_dir)])
+            keypoint_files = sorted([f for f in os.listdir(keypoints_dir)])
 
         # Checks if pose files exist for all point files
         for point_file in point_files:
-            pose_file = point_file.replace('.ply', '.txt')
-            if pose_file in pose_files:
-                self.data_paths.append((os.path.join(points_dir, point_file), os.path.join(poses_dir, pose_file)))
+            pose_file = point_file #since the pose file has the same name as the point file
+            keypoint_file = point_file
+            if pose_file in pose_files and keypoint_file in keypoint_files:
+                self.data_paths.append((os.path.join(points_dir, point_file), os.path.join(poses_dir, pose_file), os.path.join(keypoints_dir, pose_file))) #ASSUMPTION: pose_file should be the same name as keypoint filename, and point_file
             else:
                 print(f"Warning: No pose file found for {point_file}")
 
+        self.data_paths.sort()
         print(f"Loaded {len(self.data_paths)} samples from {root}.")
 
 
@@ -96,38 +75,34 @@ class ScanNetDataLoader(Dataset):
     
 
     def _get_item(self, index):
-        ply_path, pose_path = self.data_paths[index]
+        cloud_path, pose_path, keypoint_path = self.data_paths[index]
 
-        cache_key = f"{ply_path}_{pose_path}" # In the case that filenames are shared between directories
+        cache_key = f"{cloud_path}_{pose_path}_{keypoint_path}" # In the case that filenames are shared between directories
 
         if cache_key in self.cache:
-            points, poses = self.cache[cache_key]
+            point_cloud, pose, keypoint, centroid, scale = self.cache[cache_key]
         else:
-            # Load the point cloud from the PLY file
-            point_cloud = load_ply_file(ply_path)
+            # Load the point cloud from the .txt file
+            point_cloud = np.loadtxt(cloud_path).astype(np.float32) 
 
-            # Use farthest point sampling if needed
-            if self.uniform:
-                point_cloud = farthest_point_sample(point_cloud, self.npoints)
-            else:
-                point_cloud = point_cloud[:self.npoints, :]
-
-            # Optional normalization (currently commented out)
-            # point_cloud[:, :3] = pc_normalize(point_cloud[:, :3])
-
+            # NOTE: no FPS for Gazebo scans. done in dataset preprocessing
+            point_cloud = point_cloud[:self.npoints, :]
+            point_cloud[:, :3], centroid, scale = pc_normalize(point_cloud[:, :3], self.unit_sphere)
             # Load the pose data
-            pose = load_pose_file(pose_path, self.to_quaternion)
-
-            # If normal_channel=False, only return xyz coordinates
-            if not self.normal_channel:
+            pose = load_pose_file(pose_path) # [qx, qy, qz, qw, tx, ty, tz]
+            keypoint = np.loadtxt(keypoint_path).astype(np.float32)  # Load keypoints
+            keypoint[:, :3] = (keypoint[:, :3] - centroid) / scale  # Normalize keypoints with the same centroid and scale as the point cloud
+            # print("centroid and scale", centroid, scale, "for the file", cloud_path)
+            # If label_channel=False, only return xyz coordinates. Otherwise, uses xyzl with l between 0-9
+            if not self.label_channel:
                 point_cloud = point_cloud[:, 0:3]
+                # print("Not using label channel")
 
             # Store in cache if limit is not exceeded
             if len(self.cache) < self.cache_size:
-                self.cache[cache_key] = (point_cloud, pose)
+                self.cache[cache_key] = (point_cloud, pose, keypoint, centroid, scale)
 
-        return point_cloud, pose
-
+        return point_cloud, pose, keypoint, centroid, scale  # Return all values
         
 
     def __getitem__(self, index):
@@ -137,9 +112,12 @@ class ScanNetDataLoader(Dataset):
 if __name__ == '__main__':
     import torch
 
-    data = ScanNetDataLoader('/data/ScanNet/', uniform=False, normal_channel=False, to_quaternion=True)
+    data = ScanNetDataLoader('/data/ScanNet/', uniform=False, label_channel=False)
     DataLoader = torch.utils.data.DataLoader(data, batch_size=12, shuffle=True)
     
-    for points, poses in DataLoader:
-        print(points.shape)  # Expected: [batch_size, 1024, 3]
-        print(poses.shape)   # Expected: [batch_size, 7] if quaternion, or [batch_size, 4, 4] otherwise
+    for points, poses, keypoints, centroids, scales in DataLoader:
+        print(points.shape)   # Expected: [batch_size, 1024, 3]
+        print(poses.shape)    # Expected: [batch_size, 7]
+        print(keypoints.shape)  # Expected: [batch_size, num_keypoints, 3]
+        print(centroids.shape)  # Expected: [batch_size, 3]
+        print(scales.shape)     # Expected: [batch_size]
