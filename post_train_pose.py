@@ -83,24 +83,21 @@ def train():
     log_string(config)
  
     # Create DataLoader
-    # # UNCOMMENT FOR ScanNet
-    # data_path = 'data/ScanNet'
-    # dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'])
-
-    data_path = 'data/ScanNet'
-    cad_keypoint_file = 'data/ship_keypoints_40_cfg_st_dg_few.txt'
-    cad_pc_file = "data/yp_complete_cloud_less_dense.txt"
+    data_path = 'data/ScanNet/ScanNet_train'
+    cad_keypoint_file = 'data/cad_keypoints_scaled.txt'
+    cad_pc_file = "data/STL_cloud_fixed.txt"
     dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio (NOT RANDOM)
     total_samples = len(dataset)
-    train_cutoff = int(0.95 * total_samples)
+    cutoff = int(0.15 * total_samples)
 
-    train_indices = list(range(train_cutoff))
-    test_indices = list(range(train_cutoff, total_samples))
+    train_indices = list(range(cutoff))  # First 15%
+    test_indices = list(range(total_samples - cutoff, total_samples))  # Last 15%
 
     train_ds = torch.utils.data.Subset(dataset, train_indices)
     test_ds = torch.utils.data.Subset(dataset, test_indices)
+
     
     print(f"First 5 train samples: {[dataset.data_paths[i] for i in train_ds.indices[:5]]}")
     print(f"First 5 test samples: {[dataset.data_paths[i] for i in test_ds.indices[:5]]}")
@@ -118,7 +115,7 @@ def train():
     print(f"Train set saved to {train_file}, Test set saved to {test_file}")
 
     train_dl = torch.utils.data.DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=0)
-    test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=0)
+    test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=0, drop_last=True)
  
     print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
 
@@ -142,7 +139,10 @@ def train():
     ).cuda()
 
     # model = pt_pose.SortNet(128/home/karlsimon/point-transformer/log/pose_estimation/2025-02-16_18-53,6, top_k=64).cuda()
-    
+    pretrained_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-05-15_17-03/best_model.pth"  # update this path
+    checkpoint = torch.load(pretrained_path)
+    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+
     def count_parameters(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
 

@@ -21,7 +21,7 @@ torch.manual_seed(42)
 def train():
 
     # To check CUDA and PyTorch installation: $ conda list | grep 'pytorch\|cudatoolkit'
-    device_id = 1  # Change this to 1 to use the second GPU
+    device_id = 0  # Change this to 1 to use the second GPU
     torch.cuda.set_device(device_id)
 
     if torch.cuda.is_available():
@@ -84,9 +84,9 @@ def train():
     log_string(config)
  
     # Create DataLoader
-    data_path = 'data/ScanNet'
-    cad_keypoint_file = 'data/ship_keypoints_40_cfg_st_dg_few.txt'
-    cad_pc_file = "data/yp_complete_cloud_less_dense.txt"
+    data_path = 'data/ScanNet/ScanNet_train'
+    cad_keypoint_file = 'data/cad_keypoints_scaled.txt'
+    cad_pc_file = "data/YP_cloud.txt"
     dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio (NOT RANDOM)

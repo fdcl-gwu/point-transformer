@@ -448,7 +448,6 @@ class Point_Transformer(nn.Module):
                                                   self.input_dim,
                                                   self.actv_fn,
                                                   top_k = self.top_k) for _ in range(self.num_sort_nets)])
-     
 
         ## Create ball query search + feature aggregation of SortNet
         ## ball query + feat. agg

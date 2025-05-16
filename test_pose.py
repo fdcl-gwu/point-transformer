@@ -82,28 +82,19 @@ def test():
         logger.info(f"Ground Truth Translation: {gt_translation}")
         logger.info(f"Pose Estimation Loss: {loss:.6f}\n")
  
-    data_path = 'data/ScanNet'
-    cad_keypoint_file = 'data/ship_keypoints_40_cfg_st_dg_few.txt'
-    cad_pc_file = "data/yp_complete_cloud_less_dense.txt"
+    data_path = 'data/ScanNet/ScanNet_test'
+    cad_keypoint_file = 'data/cad_keypoints_scaled.txt'
+    cad_pc_file = "data/STL_cloud_fixed.txt"
     dataset = ScanNetDataLoader(root=data_path, npoint=config['num_points'], label_channel=config['use_labels'], unit_sphere=config['unit_sphere'])
 
     # Define train-test split ratio (NOT RANDOM)
     total_samples = len(dataset)
-    train_cutoff = int(0.95 * total_samples)
-
-    train_indices = list(range(train_cutoff))
-    test_indices = list(range(train_cutoff, total_samples))
-
-    train_ds = torch.utils.data.Subset(dataset, train_indices)
+    test_indices = list(range(total_samples))
     test_ds = torch.utils.data.Subset(dataset, test_indices)
 
-    print(f"First 5 train samples: {[dataset.data_paths[i] for i in train_ds.indices[:5]]}")
     print(f"First 5 test samples: {[dataset.data_paths[i] for i in test_ds.indices[:5]]}")
 
-    train_dl = torch.utils.data.DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=0)
     test_dl = torch.utils.data.DataLoader(test_ds, batch_size=config['batch_size'], shuffle=False, num_workers=0, drop_last=True)
- 
-    print(f"Train samples: {len(train_ds)}, Test samples: {len(test_ds)}")
 
     # CAD keypoints — use raw coordinates for decoder queries
     cad_kp = torch.tensor(np.loadtxt(cad_keypoint_file, dtype=np.float32))  # [40, 3]
@@ -136,7 +127,7 @@ def test():
     summary(model, input_data=[dummy_input, dummy_centroid, dummy_scale])
 
     # Load saved model
-    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-05-05_15-52/best_model.pth"
+    checkpoint_path = "/home/karlsimon/point-transformer/log/pose_estimation/2025-05-15_17-03/best_model.pth"
     checkpoint = torch.load(checkpoint_path)
 
     model.load_state_dict(checkpoint["model_state_dict"]) #load the weights
@@ -233,9 +224,9 @@ def test():
                     init_T_target_source=T_init,
                     registration_type='GICP',
                     downsampling_resolution=0.05,
-                    max_correspondence_distance=1.0,
+                    max_correspondence_distance=0.5,
                     num_threads=4,
-                    max_iterations=5,
+                    max_iterations=3,
                 )
 
                 elapsed = time.time() - start_time
@@ -243,6 +234,7 @@ def test():
 
                 # Add refinement results
                 T_refined = result.T_target_source
+
                 print("Refined T_target_source:\n", T_refined)
                 entry["refined_rotation"] = T_refined[:3, :3].tolist()
                 entry["refined_translation"] = T_refined[:3, 3].tolist()

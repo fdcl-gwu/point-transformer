@@ -112,7 +112,7 @@ class SimNetDataLoader(Dataset):
 if __name__ == '__main__':
     import torch
 
-    data = SimNetDataLoader('/data/ScanNet/', uniform=False, label_channel=False)
+    data = SimNetDataLoader('/data/SimNet/', uniform=False, label_channel=False)
     DataLoader = torch.utils.data.DataLoader(data, batch_size=12, shuffle=True)
     
     for points, poses, keypoints, centroids, scales in DataLoader:
